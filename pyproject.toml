@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "social-topic-miner"
+version = "0.1.0"
+description = "End-to-end topic clustering and summarisation for social media posts (Twitter / Reddit)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Capstone Team" }]
+keywords = ["nlp", "topic-modeling", "bertopic", "social-media", "clustering"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# Core runtime deps — keep lean so downstream projects can opt into extras
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "scikit-learn>=1.3",
+    "bertopic>=0.16",
+    "umap-learn>=0.5",
+    "hdbscan>=0.8.29",
+    "sentence-transformers>=2.7",
+]
+
+[project.optional-dependencies]
+openai = ["openai>=1.0"]
+llama = ["transformers>=4.40", "accelerate>=0.29", "bitsandbytes>=0.42", "torch>=2.0"]
+anthropic = ["anthropic>=0.25"]
+dev = ["pytest>=8.0", "ruff>=0.4", "mypy>=1.9"]
+all = [
+    "social-topic-miner[openai]",
+    "social-topic-miner[llama]",
+    "social-topic-miner[anthropic]",
+]
+
+[project.urls]
+Repository = "https://github.com/your-org/social-topic-miner"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["social_topic_miner*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
