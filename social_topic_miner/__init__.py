@@ -30,9 +30,16 @@ from .config import (
     UMAPConfig,
 )
 from .pipeline import PipelineResult, TopicMinerPipeline, TopicResult
+from .api import TopicMinerAPI, Section1Response, Section2Response, Section3Response, FullPipelineResponse
 
 __all__ = [
-    # Pipeline
+    # High-level API (recommended entry-point for full-stack backends)
+    "TopicMinerAPI",
+    "Section1Response",
+    "Section2Response",
+    "Section3Response",
+    "FullPipelineResponse",
+    # Pipeline (lower-level)
     "TopicMinerPipeline",
     "PipelineResult",
     "TopicResult",
