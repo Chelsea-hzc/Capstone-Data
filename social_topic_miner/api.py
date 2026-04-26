@@ -1,108 +1,72 @@
 """
-Public API layer — the full-stack backend calls these functions directly.
+Public API — the full-stack backend calls these three methods.
 
-Each section maps to one logical page in the product:
+  api.section1(posts)            → Section1Response
+  api.section2(request)          → Section2Response
+  api.section3(request)          → Section3Response
+  api.run_full(posts, new_posts) → FullPipelineResponse
 
-  Page 1  section1()  — "Your bubble"       : cluster & summarise the user's feed
-  Page 2  section2()  — "Other perspectives": generate queries to break echo chamber
-  Page 3  section3()  — "Diverse content"   : filter & rank the fetched diverse posts
-  All     run_full()  — single call that chains 1 → 2 → 3
-
-Request/response types are plain dataclasses so they serialise cleanly to
-JSON (e.g. via dataclasses.asdict()) without any framework dependency.
+Import the TypedDicts from social_topic_miner.types to validate shapes.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict
 
 import numpy as np
 
 from .config import TopicMinerConfig
-from .diversity.filter import DiversityFilter, DiversityFilterConfig, DiversityResult
-from .echo_breaker.query_builder import QueryBuilder, QueryBuilderConfig, SearchQuery
+from .diversity.filter import DiversityFilter, DiversityFilterConfig
+from .echo_breaker.query_builder import QueryBuilder, QueryBuilderConfig
 from .embedders.base import BaseEmbedder
 from .embedders.sentence_transformer import SentenceTransformerEmbedder
 from .pipeline import PipelineResult, TopicMinerPipeline
 from .summarizers.base import BaseSummarizer
+from .types import (
+    FullPipelineResponse,
+    FullPipelineRequest,
+    PostIn,
+    Section1Response,
+    Section2Request,
+    Section2Response,
+    Section3Request,
+    Section3Response,
+    TopicOut,
+)
 
 logger = logging.getLogger(__name__)
 
-
-# ---------------------------------------------------------------------------
-# Shared response types
-# ---------------------------------------------------------------------------
-
-@dataclass
-class TopicOut:
-    """Section 1 output for a single topic."""
-    topic_id: int
-    headline: str
-    category: str
-    keywords: list[str]
-    key_points: list[str]
-    n_posts: int
-    n_perspectives: int
-    representative_posts: list[dict]
-
-
-@dataclass
-class Section1Response:
-    topics: list[TopicOut]
-    total_posts_processed: int
-
-
-@dataclass
-class Section2Response:
-    """
-    Queries the full-stack backend should execute against social-media APIs
-    to fetch diverse/opposing content for Section 3.
-    """
-    queries: list[dict]          # SearchQuery as dicts for easy JSON serialisation
-    source_topic_ids: list[int]
-
-
-@dataclass
-class Section3Response:
-    posts: list[dict]
-    scores: list[float]
-    dropped: int
-
-
-@dataclass
-class FullPipelineResponse:
-    """Single-call response carrying data for all three pages."""
-    section1: Section1Response
-    section2: Section2Response
-    section3: Section3Response | None   # None when no new_posts were provided
-
-
-# ---------------------------------------------------------------------------
-# Main API class
-# ---------------------------------------------------------------------------
 
 class TopicMinerAPI:
     """
     Stateless façade over the three-section pipeline.
 
-    Instantiate once (e.g. at app startup) and call the section methods
-    as needed.
+    Instantiate once at app startup and reuse across requests.
 
     Parameters
     ----------
     config:
-        Master TopicMinerConfig (all defaults are sensible out-of-the-box).
+        Master TopicMinerConfig.  All defaults are production-ready.
     embedder:
-        Shared embedder reused across all sections so texts are embedded
-        in the same vector space.
+        Embedding model shared across all sections.
+        Defaults to SentenceTransformer("all-MiniLM-L6-v2").
     summarizer:
-        Optional LLM for Section 1 headline generation and (later) Section 2
-        query generation.
+        Optional LLM for Section 1 headline/category/key_points generation.
+        When None, those fields are returned as empty strings/lists.
     query_config:
-        QueryBuilderConfig for Section 2.
+        Knobs for Section 2 query generation.
     diversity_config:
-        DiversityFilterConfig for Section 3.
+        Knobs for Section 3 diversity scoring and cutoff.
+
+    Example
+    -------
+    >>> from social_topic_miner import TopicMinerAPI
+    >>> api = TopicMinerAPI()
+    >>> response = api.section1(posts)          # list[PostIn]
+    >>> queries  = api.section2({"topics": response["topics"]})
+    >>> filtered = api.section3({"new_posts": fetched_posts,
+    ...                          "bubble_keywords": response["topics"][0]["keywords"]})
     """
 
     def __init__(
@@ -113,113 +77,168 @@ class TopicMinerAPI:
         query_config: QueryBuilderConfig | None = None,
         diversity_config: DiversityFilterConfig | None = None,
     ) -> None:
-        self._embedder   = embedder or SentenceTransformerEmbedder()
-        self._pipeline   = TopicMinerPipeline(
+        self._embedder  = embedder or SentenceTransformerEmbedder()
+        self._pipeline  = TopicMinerPipeline(
             config=config,
             embedder=self._embedder,
             summarizer=summarizer,
         )
-        self._qbuilder   = QueryBuilder(
-            config=query_config,
-            summarizer=summarizer,
-        )
-        self._dfilter    = DiversityFilter(
-            config=diversity_config,
-            embedder=self._embedder,
-        )
+        self._qbuilder  = QueryBuilder(config=query_config, summarizer=summarizer)
+        self._dfilter   = DiversityFilter(config=diversity_config, embedder=self._embedder)
+        self._last_result: PipelineResult | None = None
 
     # ------------------------------------------------------------------
-    # Section 1 — cluster & summarise the user's feed
+    # Section 1
     # ------------------------------------------------------------------
 
-    def section1(self, posts: list[dict]) -> Section1Response:
+    def section1(self, posts: list[PostIn]) -> Section1Response:
         """
+        Cluster a user's feed and return topic summaries.
+
         Parameters
         ----------
-        posts:
-            Raw social-media posts.  Each dict must have at least ``text``
-            and ``platform`` keys (full schema in PostNormalizer).
+        posts : list[PostIn]
+            Raw social-media posts.  Each item must have at minimum:
+              - "text"     : str
+              - "platform" : "twitter" | "reddit"
+            See social_topic_miner.types.PostIn for all supported fields.
 
         Returns
         -------
-        Section1Response with one TopicOut per detected topic.
+        Section1Response
+            {
+              "topics": [
+                {
+                  "topic_id": int,
+                  "headline": str,
+                  "category": str,
+                  "keywords": list[str],
+                  "key_points": list[str],
+                  "n_posts": int,
+                  "n_perspectives": int,
+                  "representative_posts": [...]
+                },
+                ...
+              ],
+              "total_posts_processed": int
+            }
         """
         import pandas as pd
-        df_raw = pd.DataFrame(posts)
-        result: PipelineResult = self._pipeline.run_from_dataframe(df_raw)
-        self._last_pipeline_result = result   # stash for run_full()
 
-        topics_out = self._pipeline_result_to_topics(result)
+        df_raw = pd.DataFrame(posts)
+        result = self._pipeline.run_from_dataframe(df_raw)
+        self._last_result = result
+
         return Section1Response(
-            topics=topics_out,
+            topics=self._to_topic_out_list(result),
             total_posts_processed=len(result.df),
         )
 
     # ------------------------------------------------------------------
-    # Section 2 — generate echo-breaking search queries
+    # Section 2
     # ------------------------------------------------------------------
 
-    def section2(
-        self,
-        headlines: list[str] | None = None,
-        keywords: list[str] | None = None,
-        topics: list[dict] | None = None,
-    ) -> Section2Response:
+    def section2(self, request: Section2Request) -> Section2Response:
         """
-        Accepts either:
-        - ``topics`` — a list of TopicOut dicts (direct output of section1)
-        - ``headlines`` + ``keywords`` — manual overrides
+        Generate echo-breaking search queries from Section 1 output.
+
+        Parameters
+        ----------
+        request : Section2Request
+            Pass ONE of:
+            - {"topics": <list of TopicOut from section1()>}   ← preferred
+            - {"headlines": [...], "keywords": [...]}           ← manual override
 
         Returns
         -------
-        Section2Response with a flat list of SearchQuery dicts.
+        Section2Response
+            {
+              "queries": [
+                {
+                  "query_string": str,
+                  "platform":     "twitter" | "reddit" | "any",
+                  "intent":       "opposing" | "diverse" | "related",
+                  "source_topic_id": int,
+                  "source_keywords": list[str],
+                  "metadata": {}
+                },
+                ...
+              ],
+              "source_topic_ids": list[int]
+            }
+
+        Note
+        ----
+        The query_string values are PLACEHOLDERS.  The logic will be
+        improved once the product direction for echo-chamber breaking is
+        confirmed.  The schema will not change.
         """
+        topics = request.get("topics")
         if topics:
-            query_map = self._qbuilder.build_batch(topics)
+            query_map = self._qbuilder.build_batch([
+                {"topic_id": t["topic_id"], "headline": t["headline"], "keywords": t["keywords"]}
+                for t in topics
+            ])
         else:
-            # Single-topic shortcut: combine all headlines/keywords into one topic
+            headlines = request.get("headlines") or [""]
+            keywords  = request.get("keywords") or []
             query_map = {
                 0: self._qbuilder.build(
                     topic_id=0,
-                    headline=(headlines or [""])[0],
-                    keywords=keywords or [],
+                    headline=headlines[0],
+                    keywords=keywords,
                 )
             }
 
-        all_queries: list[SearchQuery] = []
-        for qs in query_map.values():
-            all_queries.extend(qs)
-
+        all_queries = [asdict(q) for qs in query_map.values() for q in qs]
         return Section2Response(
-            queries=[asdict(q) for q in all_queries],
+            queries=all_queries,
             source_topic_ids=list(query_map.keys()),
         )
 
     # ------------------------------------------------------------------
-    # Section 3 — filter diverse posts
+    # Section 3
     # ------------------------------------------------------------------
 
-    def section3(
-        self,
-        new_posts: list[dict],
-        bubble_keywords: list[str] | None = None,
-        bubble_embeddings: np.ndarray | None = None,
-    ) -> Section3Response:
+    def section3(self, request: Section3Request) -> Section3Response:
         """
+        Filter and rank diverse posts fetched via Section 2 queries.
+
         Parameters
         ----------
-        new_posts:
-            Posts fetched by the backend using the Section 2 queries.
-        bubble_keywords:
-            Keywords from Section 1 (for relevance scoring).
-        bubble_embeddings:
-            Embeddings of the original bubble posts (from PipelineResult.embeddings).
-            Pass these for richer divergence scoring.
+        request : Section3Request
+            {
+              "new_posts":       list[PostIn],   # required
+              "bubble_keywords": list[str]       # optional, improves scoring
+            }
+
+        Returns
+        -------
+        Section3Response
+            {
+              "posts":   list[PostIn],   # filtered, sorted by diversity score desc
+              "scores":  list[float],    # 0-1 diversity score per post
+              "dropped": int             # posts removed by cutoff threshold
+            }
+
+        Note
+        ----
+        Scoring is a PLACEHOLDER.  The current implementation uses keyword
+        overlap (relevance) and uniform 0.5 (divergence).  Both will be
+        replaced with embedding-based and/or stance-detection approaches.
+        The schema will not change.
         """
-        result: DiversityResult = self._dfilter.filter(
+        new_posts       = request.get("new_posts", [])
+        bubble_keywords = request.get("bubble_keywords", [])
+
+        bubble_embs: np.ndarray | None = None
+        if self._last_result is not None:
+            bubble_embs = self._last_result.embeddings
+
+        result = self._dfilter.filter(
             new_posts=new_posts,
             bubble_keywords=bubble_keywords,
-            bubble_embeddings=bubble_embeddings,
+            bubble_embeddings=bubble_embs,
         )
         return Section3Response(
             posts=result.posts,
@@ -228,54 +247,44 @@ class TopicMinerAPI:
         )
 
     # ------------------------------------------------------------------
-    # Combined — run all three sections in one call
+    # Combined — all three sections in one call
     # ------------------------------------------------------------------
 
-    def run_full(
-        self,
-        posts: list[dict],
-        new_posts: list[dict] | None = None,
-    ) -> FullPipelineResponse:
+    def run_full(self, request: FullPipelineRequest) -> FullPipelineResponse:
         """
-        Single entry-point for the dynamic mode.
+        Run all three sections in sequence and return data for all pages.
 
         Parameters
         ----------
-        posts:
-            The user's existing feed (Section 1 input).
-        new_posts:
-            Diverse posts already fetched externally (Section 3 input).
-            If None, Section 3 is skipped and its response is None.
+        request : FullPipelineRequest
+            {
+              "posts":     list[PostIn],   # required — user's feed
+              "new_posts": list[PostIn]    # optional — pre-fetched diverse posts
+            }
 
         Returns
         -------
-        FullPipelineResponse with data for all three pages.
+        FullPipelineResponse
+            {
+              "section1": Section1Response,
+              "section2": Section2Response,
+              "section3": Section3Response | None   # None when new_posts omitted
+            }
         """
-        # --- Section 1 ---
+        posts     = request.get("posts", [])
+        new_posts = request.get("new_posts")
+
         s1 = self.section1(posts)
 
-        # --- Section 2 ---
-        topics_as_dicts = [
-            {
-                "topic_id": t.topic_id,
-                "headline": t.headline,
-                "keywords": t.keywords,
-            }
-            for t in s1.topics
-        ]
-        s2 = self.section2(topics=topics_as_dicts)
+        s2 = self.section2({"topics": s1["topics"]})
 
-        # --- Section 3 (optional) ---
         s3: Section3Response | None = None
         if new_posts:
-            all_keywords = [kw for t in s1.topics for kw in t.keywords]
-            bubble_embs  = getattr(self, "_last_pipeline_result", None)
-            bubble_embs  = bubble_embs.embeddings if bubble_embs else None
-            s3 = self.section3(
-                new_posts=new_posts,
-                bubble_keywords=all_keywords,
-                bubble_embeddings=bubble_embs,
-            )
+            all_keywords = [kw for t in s1["topics"] for kw in t["keywords"]]
+            s3 = self.section3({
+                "new_posts": new_posts,
+                "bubble_keywords": all_keywords,
+            })
 
         return FullPipelineResponse(section1=s1, section2=s2, section3=s3)
 
@@ -283,14 +292,14 @@ class TopicMinerAPI:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _pipeline_result_to_topics(self, result: PipelineResult) -> list[TopicOut]:
+    def _to_topic_out_list(self, result: PipelineResult) -> list[TopicOut]:
         out = []
         for tr in result.topics:
             s = tr.summary
             out.append(TopicOut(
                 topic_id=tr.topic_id,
-                headline=s.headline   if s else "",
-                category=s.category   if s else "Unknown",
+                headline=s.headline    if s else "",
+                category=s.category    if s else "Unknown",
                 keywords=tr.keywords,
                 key_points=s.key_points if s else [],
                 n_posts=tr.n_posts,

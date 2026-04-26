@@ -30,14 +30,31 @@ from .config import (
     UMAPConfig,
 )
 from .pipeline import PipelineResult, TopicMinerPipeline, TopicResult
-from .api import TopicMinerAPI, Section1Response, Section2Response, Section3Response, FullPipelineResponse
+from .api import TopicMinerAPI
+from .types import (
+    PostIn,
+    TopicOut,
+    Section1Response,
+    Section2Request,
+    Section2Response,
+    Section3Request,
+    Section3Response,
+    FullPipelineRequest,
+    FullPipelineResponse,
+)
 
 __all__ = [
     # High-level API (recommended entry-point for full-stack backends)
     "TopicMinerAPI",
+    # Input/output types (import these for type hints in your backend)
+    "PostIn",
+    "TopicOut",
     "Section1Response",
+    "Section2Request",
     "Section2Response",
+    "Section3Request",
     "Section3Response",
+    "FullPipelineRequest",
     "FullPipelineResponse",
     # Pipeline (lower-level)
     "TopicMinerPipeline",
