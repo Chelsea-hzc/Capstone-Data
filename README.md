@@ -1,6 +1,6 @@
 # social-topic-miner
 
-A Python package that clusters social media posts into topics, generates echo-chamber-breaking search queries, and filters diverse content — designed to power a three-page "news feed awareness" product.
+A Python package that clusters social media posts into topics, generates echo-chamber-breaking search queries, and filters diverse content — designed to power a three-tab "news feed awareness" product.
 
 ---
 
@@ -33,74 +33,107 @@ The package sits between a social-media data-collection layer and a full-stack f
         ▼
 [social-topic-miner]  ◄─── this repo
    Section 1: cluster & summarise the user's feed
-   Section 2: generate queries to find diverse perspectives
-   Section 3: score & filter the fetched diverse posts
+   Section 2: generate ranked search queries to find diverse perspectives
+   Section 3: score & split fetched posts into two lists
         │  structured JSON results
         ▼
 [Full-stack front/back-end product]
-   Page 1: "Your bubble"           ← Section 1 output
-   Page 2: "Other perspectives"    ← Section 2 queries executed by backend
-   Page 3: "Diverse content"       ← Section 3 output
+   Tab 1: "Feed & For You"    ← Section 1 output
+   Tab 2: "Balanced"          ← Section 3 balanced list → re-run Section 1
+   Tab 3: "Other"             ← Section 3 other list
 ```
 
 ---
 
 ## Architecture
 
-### Three-section pipeline
+### Full pipeline flow
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  SECTION 1 — "Your Bubble"                                      │
-│                                                                 │
-│  posts[]                                                        │
-│    │                                                            │
-│    ├─► PostNormalizer   normalise Twitter / Reddit schemas      │
-│    │       └─► TextCleaner   clean text (URLs, mentions, etc.) │
-│    │                                                            │
-│    ├─► Embedder         encode text → float vectors            │
-│    │   (pluggable: SentenceTransformer | OpenAI | custom)      │
-│    │                                                            │
-│    ├─► TopicClusterer   BERTopic (UMAP → HDBSCAN → c-TF-IDF)  │
-│    │                                                            │
-│    ├─► EngagementScorer rank topics by engagement              │
-│    │                                                            │
-│    ├─► SubPartitioner   KMeans sub-perspectives per topic      │
-│    │                                                            │
-│    ├─► PostSampler      pick representative posts              │
-│    │                                                            │
-│    └─► Summarizer       LLM → headline, category, key_points   │
-│        (pluggable: OpenAI | Anthropic | Llama | None)          │
-│                                                                 │
-│  → Section1Response  { topics[], total_posts_processed }       │
-└─────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────┐
-│  SECTION 2 — "Find Other Perspectives"          [PLACEHOLDER]  │
-│                                                                 │
-│  topics[] (from Section 1)                                      │
-│    │                                                            │
-│    └─► QueryBuilder   headline + keywords → search queries     │
-│        strategy: keyword inversion (now) | LLM (TODO)          │
-│                                                                 │
-│  → Section2Response  { queries[], source_topic_ids[] }         │
-│                                                                 │
-│  Backend executes queries against Twitter / Reddit API          │
-└─────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────┐
-│  SECTION 3 — "Diverse Content"                  [PLACEHOLDER]  │
-│                                                                 │
-│  new_posts[] (fetched by backend using Section 2 queries)       │
-│    │                                                            │
-│    └─► DiversityFilter                                         │
-│          relevance score:  keyword overlap (now) | embed (TODO) │
-│          divergence score: 1 − cosine_sim to bubble (TODO)     │
-│          recency score:    timestamp decay (TODO)              │
-│          cutoff:           drop below min_diversity_score       │
-│                                                                 │
-│  → Section3Response  { posts[], scores[], dropped }            │
-└─────────────────────────────────────────────────────────────────┘
+API — Following feed (N posts)
+  │
+  ▼
+┌──────────────────────────────────────────────────────────────────┐
+│  SECTION 1 — Cluster + Summarise  (run on following feed)        │
+│                                                                  │
+│  posts[]                                                         │
+│    ├─► PostNormalizer   Twitter / Reddit → unified schema        │
+│    │       └─► TextCleaner   URLs, mentions, hashtags            │
+│    ├─► Embedder         text → float vectors                     │
+│    │   (pluggable: SentenceTransformer | OpenAI | custom)        │
+│    ├─► TopicClusterer   BERTopic (UMAP → HDBSCAN → c-TF-IDF)    │
+│    ├─► EngagementScorer rank topics by engagement                │
+│    ├─► SubPartitioner   KMeans sub-perspectives per topic        │
+│    ├─► PostSampler      pick S representative posts per topic    │
+│    └─► Summarizer       LLM → headline · short_summary ·        │
+│        (OpenAI|Anthropic|Llama|None)   long_summary · key_points │
+│                                                                  │
+│  → Section1Response                                              │
+│      topics[]:  topic_id, headline, short_summary, long_summary  │
+│                 category, keywords, key_points, n_posts,         │
+│                 n_perspectives, representative_posts[]           │
+│      total_posts_processed: int                                  │
+│      digest: str   (5-10 sentence feed overview — LLM or concat) │
+└──────────────────────────────────────────────────────────────────┘
+        │                               │
+        │ Tab 1: Feed & For You         │ full TopicOut per topic
+        ▼                               ▼
+  [Frontend]            ┌──────────────────────────────────────────┐
+                        │  SECTION 2 — Query Generation            │
+                        │                                          │
+                        │  TopicOut[] (full Section 1 output)      │
+                        │    └─► QueryBuilder                      │
+                        │          keyword expansion from          │
+                        │          keywords + key_points           │
+                        │          NER anchor extraction (spaCy)   │
+                        │          one query per stance bucket:    │
+                        │            critical · emotional ·        │
+                        │            supportive · neutral ·        │
+                        │            industry                      │
+                        │          MAX_OR_TERMS = 5 enforced       │
+                        │                                          │
+                        │  → Section2Response                      │
+                        │      queries[] sorted by probability↓:  │
+                        │        query_string, platform, intent,  │
+                        │        probability, source_topic_id,     │
+                        │        source_keywords, metadata         │
+                        │      source_topic_ids: list[int]         │
+                        └──────────────────────────────────────────┘
+                                        │
+                              Backend executes queries
+                              against Twitter / Reddit API
+                                        │
+                                        ▼
+                          Search results (K queries × Q posts)
+                                        │
+                                        ▼
+┌──────────────────────────────────────────────────────────────────┐
+│  SECTION 3 — Diversity Cut-off                                   │
+│                                                                  │
+│  new_posts[] (from search) + optional following posts            │
+│    └─► DiversityFilter                                           │
+│          relevance:   keyword overlap | embedding cosine sim     │
+│          divergence:  1 − cosine_sim to bubble centroid          │
+│          recency:     timestamp decay (TODO)                     │
+│          split:                                                  │
+│            score ≥ balanced_threshold (0.50) → balanced[]       │
+│            score ≥ min_diversity_score (0.30) → other[]         │
+│            score <  min_diversity_score       → dropped          │
+│                                                                  │
+│  → Section3Response                                              │
+│      balanced[]:        high-diversity posts                     │
+│      balanced_scores[]: diversity score per balanced post        │
+│      other[]:           lower-diversity posts still above floor  │
+│      other_scores[]:    diversity score per other post           │
+│      dropped:           int  (below minimum floor)               │
+└──────────────────────────────────────────────────────────────────┘
+        │                               │
+        │ Tab 3: Other                  │ balanced[] → re-run Section 1
+        ▼                               ▼
+  [Frontend]              Section 1 on balanced posts
+                                        │
+                                        ▼ Tab 2: Balanced
+                                  [Frontend]
 ```
 
 ### Key design decisions
@@ -109,9 +142,13 @@ The package sits between a social-media data-collection layer and a full-stack f
 |---|---|
 | Pluggable embedder | SentenceTransformer works offline/free; OpenAI gives higher quality; custom models drop in with one class |
 | Pluggable summarizer | OpenAI, Anthropic Claude, local Llama all work; `None` skips summarisation entirely |
+| `short_summary` + `long_summary` | Frontend needs both a card preview (1-2 sentences) and a detail view (paragraph) without calling the API twice |
+| `digest` on Section1Response | Banner text summarising the whole feed; LLM-generated when a summarizer is attached, headline-concat fallback otherwise |
+| Probability on queries | Backend can send only the top-K queries; critical/emotional stances score highest based on experiment results |
+| Full TopicOut as Section 2 input | Decouples keyword expansion from the API contract — swap to use representative posts or summaries without changing the caller |
+| Two-list Section 3 output | `balanced` goes back into Section 1 to cluster the diverse perspective; `other` is shown as a flat ranked list |
 | TypedDicts for all I/O | Backend can import the types for type-checking without pulling in heavy ML deps |
 | Sections are independent | Backend can call section1 → wait → section2 → fetch → section3 across multiple HTTP requests |
-| Placeholder sections | Sections 2 & 3 have stable schemas now; logic will improve without breaking the API |
 
 ---
 
@@ -143,19 +180,20 @@ social_topic_miner/
 │   └── sampler.py           ← Representative post selection
 │
 ├── summarizers/
-│   ├── base.py              ← BaseSummarizer ABC (subclass to add a model)
+│   ├── base.py              ← BaseSummarizer ABC + summarize_digest()
 │   ├── openai.py
 │   ├── anthropic.py
 │   └── llama.py
 │
 ├── echo_breaker/
-│   └── query_builder.py     ← Section 2 placeholder
+│   └── query_builder.py     ← Section 2: stance-based query builder
 │
 └── diversity/
-    └── filter.py            ← Section 3 placeholder
+    └── filter.py            ← Section 3: two-list diversity cut-off
 
 examples/
-└── quickstart.py            ← Runnable examples for every configuration
+├── quickstart.py            ← Minimal usage examples
+└── colab_full_flow_test.py  ← Full flow test matching the product diagram
 ```
 
 ---
@@ -190,10 +228,10 @@ The full-stack backend interacts with one class: `TopicMinerAPI`.
 ```python
 from social_topic_miner import TopicMinerAPI
 
-api = TopicMinerAPI()   # uses SentenceTransformer + no summarizer by default
+api = TopicMinerAPI()   # SentenceTransformer embedder, no summarizer by default
 ```
 
-To add a summarizer:
+To add a summarizer (enables `headline`, `short_summary`, `long_summary`, `digest`, `key_points`):
 ```python
 from social_topic_miner.summarizers import OpenAISummarizer, AnthropicSummarizer
 
@@ -236,12 +274,14 @@ Full schema: [`social_topic_miner/types.py → PostIn`](social_topic_miner/types
   "topics": [
     {
       "topic_id":             int,          # cluster ID (stable within a run)
-      "headline":             str,          # LLM-generated news headline
-      "category":             str,          # e.g. "Tech", "Sports", "Politics"
-      "keywords":             list[str],    # top c-TF-IDF terms
-      "key_points":           list[str],    # LLM-generated bullet points
-      "n_posts":              int,          # posts in this cluster
-      "n_perspectives":       int,          # sub-clusters within the topic
+      "headline":             str,          # LLM: news-style headline
+      "category":             str,          # LLM: e.g. "Tech", "Sports", "Politics"
+      "short_summary":        str,          # LLM: 1-2 sentences for card / preview view
+      "long_summary":         str,          # LLM: paragraph for detail / expanded view
+      "keywords":             list[str],    # top c-TF-IDF terms from BERTopic
+      "key_points":           list[str],    # LLM: bullet-point highlights
+      "n_posts":              int,          # posts assigned to this cluster
+      "n_perspectives":       int,          # sub-clusters (viewpoints) within topic
       "representative_posts": [
         {
           "post_id":          str,
@@ -256,20 +296,23 @@ Full schema: [`social_topic_miner/types.py → PostIn`](social_topic_miner/types
     },
     ...
   ],
-  "total_posts_processed": int
+  "total_posts_processed": int,
+  "digest":                str            # 5-10 sentence overview across all topics
 }
 ```
 
-> `headline`, `category`, `key_points` are empty/`"Unknown"` when no summarizer is configured.
+> `headline`, `category`, `short_summary`, `long_summary`, `key_points` are empty / `"Unknown"` when no summarizer is configured.  
+> `digest` falls back to a `" | "`-joined headline string when no summarizer is configured.
 
 ---
 
 ### Section 2 — Generate echo-breaking queries
 
 ```python
+# Normal flow — pass the full Section 1 topic output
 response = api.section2({"topics": s1["topics"]})
 
-# or with manual overrides:
+# Manual override for testing
 response = api.section2({"headlines": ["AI safety cuts"], "keywords": ["AI", "safety"]})
 ```
 
@@ -277,21 +320,24 @@ response = api.section2({"headlines": ["AI safety cuts"], "keywords": ["AI", "sa
 
 | Option | Fields | When to use |
 |---|---|---|
-| From Section 1 | `{"topics": list[TopicOut]}` | Normal flow |
+| From Section 1 | `{"topics": list[TopicOut]}` | Normal flow — all topic fields are used for keyword expansion |
 | Manual | `{"headlines": list[str], "keywords": list[str]}` | Testing / overrides |
+
+The builder uses the full `TopicOut` dict internally: `keywords` and `key_points` feed keyword expansion; `headline` drives NER anchor extraction (spaCy); `representative_posts` is reserved for future embedding-based expansion.
 
 **Output** `Section2Response`
 
 ```python
 {
-  "queries": [
+  "queries": [          # sorted by probability descending — send top-K first
     {
-      "query_string":     str,          # search string for the platform API
+      "query_string":     str,          # ready-to-send search string
       "platform":         str,          # "twitter" | "reddit" | "any"
       "intent":           str,          # "opposing" | "diverse" | "related" | "factual"
+      "probability":      float,        # 0–1 estimated probability of diverse results
       "source_topic_id":  int,
       "source_keywords":  list[str],
-      "metadata":         dict          # reserved for future use
+      "metadata":         dict          # includes {"stance": "critical"} etc.
     },
     ...
   ],
@@ -299,8 +345,22 @@ response = api.section2({"headlines": ["AI safety cuts"], "keywords": ["AI", "sa
 }
 ```
 
-> ⚠️ **Placeholder** — `query_string` values are generated by a keyword heuristic.
-> The schema is stable; the logic will be improved.
+**Query shape (Twitter v2 syntax):**
+```
+(anchor1 OR anchor2) (bridge1 OR bridge2 OR ...) (stance1 OR stance2 OR ...) -is:retweet lang:en
+```
+
+**Stance buckets and default probabilities:**
+
+| Stance | Intent | Probability |
+|---|---|---|
+| `critical` | opposing | 0.88 |
+| `emotional` | diverse | 0.78 |
+| `supportive` | diverse | 0.65 |
+| `neutral` | related | 0.58 |
+| `industry` | related | 0.52 |
+
+> OR blocks are hard-capped at 5 terms (`MAX_OR_TERMS = 5`) — longer blocks return 0 results on the Twitter v2 recent-search endpoint.
 
 ---
 
@@ -308,9 +368,14 @@ response = api.section2({"headlines": ["AI safety cuts"], "keywords": ["AI", "sa
 
 ```python
 response = api.section3({
-    "new_posts":       fetched_posts,            # list[PostIn] from platform API
-    "bubble_keywords": s1["topics"][0]["keywords"],  # improves scoring
+    "new_posts":       fetched_posts,          # list[PostIn] from platform API
+    "bubble_keywords": all_bubble_keywords,    # flat list of all Section 1 keywords
 })
+```
+
+Collect `all_bubble_keywords` from Section 1:
+```python
+all_bubble_keywords = [kw for t in s1["topics"] for kw in t["keywords"]]
 ```
 
 **Input** `Section3Request`
@@ -318,20 +383,44 @@ response = api.section3({
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `new_posts` | `list[PostIn]` | ✅ | Posts fetched via Section 2 queries |
-| `bubble_keywords` | `list[str]` | recommended | All keywords from Section 1 topics |
+| `bubble_keywords` | `list[str]` | recommended | All keywords from Section 1 — improves relevance scoring |
 
 **Output** `Section3Response`
 
 ```python
 {
-  "posts":   list[PostIn],   # filtered posts, sorted by diversity score descending
-  "scores":  list[float],    # 0–1 diversity score per post (same order)
-  "dropped": int             # posts removed by the cutoff threshold
+  "balanced":        list[PostIn],  # score ≥ balanced_threshold (default 0.50)
+                                    # → feed these back into Section 1 for the Balanced tab
+  "balanced_scores": list[float],   # diversity score per balanced post (same order)
+  "other":           list[PostIn],  # min_score ≤ score < balanced_threshold (default 0.30–0.50)
+                                    # → show as flat ranked list in the Other tab
+  "other_scores":    list[float],   # diversity score per other post (same order)
+  "dropped":         int            # posts below min_diversity_score, discarded
 }
 ```
 
-> ⚠️ **Placeholder** — scoring uses keyword overlap + uniform divergence.
-> The schema is stable; embedding-based and stance-detection scoring coming later.
+Both lists are sorted by diversity score descending.  The combined size is capped at `max_posts_out` (default 20).
+
+**Recommended backend flow:**
+```python
+s3 = api.section3({"new_posts": search_results, "bubble_keywords": all_bubble_keywords})
+
+# Tab 2 — Balanced: re-cluster the diverse posts
+s1_balanced = api.section1(s3["balanced"])
+
+# Tab 3 — Other: show as a flat ranked list
+other_posts = s3["other"]
+```
+
+**Diversity score components:**
+
+| Component | Weight | Current implementation |
+|---|---|---|
+| Relevance | 0.40 | Keyword overlap with bubble topics |
+| Divergence | 0.40 | 1 − cosine similarity to bubble centroid (requires embedder) |
+| Recency | 0.20 | Uniform 0.5 placeholder (timestamp decay TODO) |
+
+> Thresholds (`balanced_threshold`, `min_diversity_score`) and weights are configurable via `DiversityFilterConfig`.
 
 ---
 
@@ -424,14 +513,19 @@ api = TopicMinerAPI(summarizer=AnthropicSummarizer(api_key="...", model="claude-
 api = TopicMinerAPI(summarizer=LlamaSummarizer(model_id="meta-llama/Meta-Llama-3.1-8B-Instruct"))
 ```
 
-**Custom summarizer** — subclass `BaseSummarizer`:
+**Custom summarizer** — subclass `BaseSummarizer` and implement `summarize()`.  Override `summarize_digest()` for a custom feed digest:
 
 ```python
 from social_topic_miner.summarizers.base import BaseSummarizer, TopicSummary
 
 class MySummarizer(BaseSummarizer):
     def summarize(self, topic_id: int, posts: list[str], keywords: list[str]) -> TopicSummary:
-        # call your LLM, return a TopicSummary
+        # call your LLM; return TopicSummary with headline, short_summary,
+        # long_summary, category, key_points
+        ...
+
+    def summarize_digest(self, topic_summaries: list[TopicSummary]) -> str:
+        # optional — return a multi-sentence digest of all topics
         ...
 ```
 
@@ -449,13 +543,19 @@ from social_topic_miner.config import (
     SelectionConfig,      # top_n_topics, engagement weights
     SamplingConfig,       # recency_window_hours, target_min/max
 )
+from social_topic_miner.diversity.filter import DiversityFilterConfig
 
 config = TopicMinerConfig(
     preprocessing=PreprocessingConfig(min_word_count=5),
     selection=SelectionConfig(top_n_topics=7),
     sampling=SamplingConfig(recency_window_hours=48, target_max=12),
 )
-api = TopicMinerAPI(config=config)
+diversity_config = DiversityFilterConfig(
+    balanced_threshold=0.55,     # raise to make Balanced tab stricter
+    min_diversity_score=0.25,    # lower to keep more posts in Other tab
+    max_posts_out=30,
+)
+api = TopicMinerAPI(config=config, diversity_config=diversity_config)
 ```
 
 Full list of parameters: [`social_topic_miner/config.py`](social_topic_miner/config.py)
@@ -467,10 +567,12 @@ Full list of parameters: [`social_topic_miner/config.py`](social_topic_miner/con
 | What to change | Where to look | What to implement |
 |---|---|---|
 | New embedding model | `embedders/` | Subclass `BaseEmbedder`, implement `embed()` |
-| New LLM summarizer | `summarizers/` | Subclass `BaseSummarizer`, implement `summarize()` |
+| New LLM summarizer | `summarizers/` | Subclass `BaseSummarizer`, implement `summarize()` and optionally `summarize_digest()` |
 | New social platform | `preprocessing/normalizer.py` | Override `_extra_platform_rows()` |
-| Better query generation | `echo_breaker/query_builder.py` | Fill in `_strategy_llm()` or add a new `_strategy_*` method |
+| Better keyword expansion | `echo_breaker/query_builder.py` | Replace `_expand_keywords()` — receives full TopicOut including representative posts |
+| Better query generation | `echo_breaker/query_builder.py` | Fill in `_strategy_llm()` or extend `_build_stance_queries()` |
 | Better diversity scoring | `diversity/filter.py` | Replace `_score_relevance()` and `_score_divergence()` |
+| Change balanced / other split | `DiversityFilterConfig` | Adjust `balanced_threshold` and `min_diversity_score` |
 
 ---
 
