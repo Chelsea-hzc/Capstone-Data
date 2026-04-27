@@ -77,14 +77,15 @@ class TopicMinerAPI:
         query_config: QueryBuilderConfig | None = None,
         diversity_config: DiversityFilterConfig | None = None,
     ) -> None:
-        self._embedder  = embedder or SentenceTransformerEmbedder()
-        self._pipeline  = TopicMinerPipeline(
+        self._embedder    = embedder or SentenceTransformerEmbedder()
+        self._summarizer  = summarizer
+        self._pipeline    = TopicMinerPipeline(
             config=config,
             embedder=self._embedder,
             summarizer=summarizer,
         )
-        self._qbuilder  = QueryBuilder(config=query_config, summarizer=summarizer)
-        self._dfilter   = DiversityFilter(config=diversity_config, embedder=self._embedder)
+        self._qbuilder    = QueryBuilder(config=query_config, summarizer=summarizer)
+        self._dfilter     = DiversityFilter(config=diversity_config, embedder=self._embedder)
         self._last_result: PipelineResult | None = None
 
     # ------------------------------------------------------------------
@@ -129,9 +130,13 @@ class TopicMinerAPI:
         result = self._pipeline.run_from_dataframe(df_raw)
         self._last_result = result
 
+        topics = self._to_topic_out_list(result)
+        digest = self._build_digest(result)
+
         return Section1Response(
-            topics=self._to_topic_out_list(result),
+            topics=topics,
             total_posts_processed=len(result.df),
+            digest=digest,
         )
 
     # ------------------------------------------------------------------
@@ -175,10 +180,9 @@ class TopicMinerAPI:
         """
         topics = request.get("topics")
         if topics:
-            query_map = self._qbuilder.build_batch([
-                {"topic_id": t["topic_id"], "headline": t["headline"], "keywords": t["keywords"]}
-                for t in topics
-            ])
+            # Pass the full TopicOut dict so build_batch() can use all fields
+            # (keywords, key_points, representative_posts, summaries) for expansion.
+            query_map = self._qbuilder.build_batch(list(topics))
         else:
             headlines = request.get("headlines") or [""]
             keywords  = request.get("keywords") or []
@@ -190,7 +194,12 @@ class TopicMinerAPI:
                 )
             }
 
-        all_queries = [asdict(q) for qs in query_map.values() for q in qs]
+        # Flatten and sort by probability descending so the backend sends
+        # highest-confidence queries first.
+        all_queries = sorted(
+            [asdict(q) for qs in query_map.values() for q in qs],
+            key=lambda q: -q["probability"],
+        )
         return Section2Response(
             queries=all_queries,
             source_topic_ids=list(query_map.keys()),
@@ -241,8 +250,10 @@ class TopicMinerAPI:
             bubble_embeddings=bubble_embs,
         )
         return Section3Response(
-            posts=result.posts,
-            scores=result.scores,
+            balanced=result.balanced,
+            balanced_scores=result.balanced_scores,
+            other=result.other,
+            other_scores=result.other_scores,
             dropped=result.dropped,
         )
 
@@ -298,12 +309,26 @@ class TopicMinerAPI:
             s = tr.summary
             out.append(TopicOut(
                 topic_id=tr.topic_id,
-                headline=s.headline    if s else "",
-                category=s.category    if s else "Unknown",
+                headline=s.headline       if s else "",
+                category=s.category       if s else "Unknown",
+                short_summary=s.short_summary if s else "",
+                long_summary=s.long_summary   if s else "",
                 keywords=tr.keywords,
-                key_points=s.key_points if s else [],
+                key_points=s.key_points   if s else [],
                 n_posts=tr.n_posts,
                 n_perspectives=tr.n_perspectives,
                 representative_posts=tr.representative_posts,
             ))
         return out
+
+    def _build_digest(self, result: PipelineResult) -> str:
+        """Generate the overall feed digest across all topics."""
+        topic_summaries = [tr.summary for tr in result.topics if tr.summary is not None]
+        if self._summarizer is not None:
+            try:
+                return self._summarizer.summarize_digest(topic_summaries)
+            except Exception:
+                logger.warning("Digest generation failed — falling back to headline concat")
+        # Fallback: join headlines when no summarizer or on error
+        headlines = [tr.summary.headline for tr in result.topics if tr.summary and tr.summary.headline]
+        return " | ".join(headlines)

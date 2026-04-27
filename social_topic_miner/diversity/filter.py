@@ -24,12 +24,16 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class DiversityFilterConfig:
-    # --- Cutoff ---
+    # --- Cutoffs ---
     min_diversity_score: float = 0.30
-    """Posts scoring below this are dropped.  0 = keep all, 1 = keep none."""
+    """Posts scoring below this are dropped entirely (neither list receives them)."""
+
+    balanced_threshold: float = 0.50
+    """Posts at or above this go into 'balanced' (→ feed back into Section 1).
+    Posts in [min_diversity_score, balanced_threshold) go into 'other'."""
 
     max_posts_out: int = 20
-    """Hard cap on how many posts are returned per call."""
+    """Hard cap on the combined balanced + other list size."""
 
     # --- Scoring weights (must sum to 1.0) ---
     weight_relevance: float  = 0.40
@@ -51,14 +55,22 @@ class DiversityFilterConfig:
 
 @dataclass
 class DiversityResult:
-    posts: list[dict]
-    """Filtered and ranked posts, highest diversity score first."""
+    balanced: list[dict]
+    """High-diversity posts (score >= balanced_threshold), sorted score desc.
+    Feed these back into Section 1 to cluster the diverse perspective."""
 
-    scores: list[float]
-    """Diversity score for each post (aligned with posts list)."""
+    balanced_scores: list[float]
+    """Diversity score per balanced post (aligned)."""
+
+    other: list[dict]
+    """Lower-diversity posts (min_diversity_score <= score < balanced_threshold).
+    Still relevant but not diverse enough for the primary feed."""
+
+    other_scores: list[float]
+    """Diversity score per other post (aligned)."""
 
     dropped: int
-    """How many posts were removed by the cutoff."""
+    """Posts removed entirely (score < min_diversity_score)."""
 
     metadata: dict = field(default_factory=dict)
 
@@ -123,34 +135,53 @@ class DiversityFilter:
             divergence scoring.
         """
         if not new_posts:
-            return DiversityResult(posts=[], scores=[], dropped=0)
+            return DiversityResult(
+                balanced=[], balanced_scores=[],
+                other=[], other_scores=[],
+                dropped=0,
+            )
 
         texts = [p.get("text", "") for p in new_posts]
         scores = self._score(texts, bubble_keywords or [], bubble_embeddings)
 
         cfg = self.config
         before = len(new_posts)
-        pairs = [
-            (post, score)
-            for post, score in zip(new_posts, scores)
-            if score >= cfg.min_diversity_score
-        ]
 
-        # Sort highest-diversity first, then cap
-        pairs.sort(key=lambda x: -x[1])
-        pairs = pairs[: cfg.max_posts_out]
+        balanced_pairs: list[tuple[dict, float]] = []
+        other_pairs: list[tuple[dict, float]] = []
+        dropped = 0
 
-        kept_posts  = [p for p, _ in pairs]
-        kept_scores = [s for _, s in pairs]
+        for post, score in zip(new_posts, scores):
+            if score < cfg.min_diversity_score:
+                dropped += 1
+            elif score >= cfg.balanced_threshold:
+                balanced_pairs.append((post, score))
+            else:
+                other_pairs.append((post, score))
+
+        # Sort each list highest-diversity first, then enforce combined cap
+        balanced_pairs.sort(key=lambda x: -x[1])
+        other_pairs.sort(key=lambda x: -x[1])
+
+        # Apply max_posts_out across both lists (balanced takes priority)
+        remaining = cfg.max_posts_out
+        balanced_pairs = balanced_pairs[:remaining]
+        remaining -= len(balanced_pairs)
+        other_pairs = other_pairs[:max(remaining, 0)]
 
         logger.info(
-            "DiversityFilter: %d → %d posts (dropped %d below threshold %.2f)",
-            before, len(kept_posts), before - len(kept_posts), cfg.min_diversity_score,
+            "DiversityFilter: %d in → %d balanced, %d other, %d dropped "
+            "(thresholds: balanced≥%.2f, min≥%.2f)",
+            before,
+            len(balanced_pairs), len(other_pairs), dropped,
+            cfg.balanced_threshold, cfg.min_diversity_score,
         )
         return DiversityResult(
-            posts=kept_posts,
-            scores=kept_scores,
-            dropped=before - len(kept_posts),
+            balanced=[p for p, _ in balanced_pairs],
+            balanced_scores=[s for _, s in balanced_pairs],
+            other=[p for p, _ in other_pairs],
+            other_scores=[s for _, s in other_pairs],
+            dropped=dropped,
         )
 
     # ------------------------------------------------------------------

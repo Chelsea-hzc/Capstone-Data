@@ -8,7 +8,7 @@ Supports claude-sonnet-4-6, claude-haiku-4-5, etc.
 from __future__ import annotations
 
 from ..config import SummarisationConfig
-from .base import BaseSummarizer, TopicSummary
+from .base import BaseSummarizer, TopicSummary, _DIGEST_SYSTEM_PROMPT
 
 
 class AnthropicSummarizer(BaseSummarizer):
@@ -55,3 +55,19 @@ class AnthropicSummarizer(BaseSummarizer):
         )
         raw = response.content[0].text if response.content else ""
         return self._parse_response(topic_id, raw)
+
+    def summarize_digest(self, topic_summaries: list[TopicSummary]) -> str:
+        if not topic_summaries:
+            return ""
+        cfg = self.config
+        response = self._client.messages.create(
+            model=self.model,
+            max_tokens=500,
+            system=_DIGEST_SYSTEM_PROMPT,
+            messages=[
+                {"role": "user", "content": self._build_digest_user_prompt(topic_summaries)},
+            ],
+            temperature=cfg.temperature,
+        )
+        raw = response.content[0].text if response.content else ""
+        return raw or super().summarize_digest(topic_summaries)

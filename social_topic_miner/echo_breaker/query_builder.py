@@ -137,9 +137,28 @@ class SearchQuery:
     query_string: str
     platform: str                  # "twitter" | "reddit" | "any"
     intent: QueryIntent
+    probability: float = 0.5
+    """Estimated probability (0-1) that this query returns diverse, useful results.
+    Higher = send first.  Based on stance type and anchor quality."""
     source_topic_id: int = -1
     source_keywords: list[str] = field(default_factory=list)
     metadata: dict = field(default_factory=dict)
+
+
+# Estimated probability of finding diverse perspectives per stance bucket,
+# based on query-expansion experiments.
+_STANCE_PROBABILITY: dict[str, float] = {
+    "critical":   0.88,
+    "emotional":  0.78,
+    "supportive": 0.65,
+    "broader":    0.62,
+    "neutral":    0.58,
+    "analytical": 0.55,
+    "industry":   0.52,
+    "community":  0.50,
+    "speculation":0.48,
+    "humor":      0.40,
+}
 
 
 @dataclass
@@ -316,30 +335,46 @@ class QueryBuilder:
         topic_id: int,
         headline: str,
         keywords: list[str],
+        key_points: list[str] | None = None,
+        representative_posts: list[dict] | None = None,
+        short_summary: str = "",
+        long_summary: str = "",
     ) -> list[SearchQuery]:
         """
         Generate search queries for a single topic.
 
         Parameters
         ----------
-        topic_id:   numeric ID from Section 1
-        headline:   LLM-generated headline from Section 1
-        keywords:   c-TF-IDF keywords from Section 1
+        topic_id:              numeric ID from Section 1
+        headline:              LLM-generated headline
+        keywords:              c-TF-IDF keywords from BERTopic
+        key_points:            LLM-generated bullet points (used for keyword expansion)
+        representative_posts:  sampled posts (reserved for future embedding-based expansion)
+        short_summary:         1-2 sentence summary (reserved for future use)
+        long_summary:          full paragraph summary (reserved for future use)
         """
+        expanded_keywords = self._expand_keywords(
+            keywords=keywords,
+            key_points=key_points,
+        )
+
         if self.config.use_llm and self.summarizer is not None:
             anchor_terms, bridge_terms = self._llm_anchor_bridge(
-                topic_id, headline, keywords
+                topic_id, headline, expanded_keywords
             )
         else:
-            anchor_terms = _extract_anchors(headline, keywords)
-            bridge_terms = [kw for kw in keywords if kw not in anchor_terms]
+            anchor_terms = _extract_anchors(headline, expanded_keywords)
+            bridge_terms = [kw for kw in expanded_keywords if kw not in anchor_terms]
 
         queries = self._build_stance_queries(
             topic_id=topic_id,
             anchor_terms=anchor_terms,
             bridge_terms=bridge_terms,
-            keywords=keywords,
+            keywords=expanded_keywords,
         )
+
+        # Sort highest-probability first so the backend can send top-N
+        queries.sort(key=lambda q: -q.probability)
 
         logger.info("Topic %d → %d queries generated", topic_id, len(queries))
         return queries[: self.config.max_queries_per_topic]
@@ -354,16 +389,50 @@ class QueryBuilder:
         Parameters
         ----------
         topics:
-            List of dicts with keys ``topic_id``, ``headline``, ``keywords``.
+            List of TopicOut dicts (full Section 1 output per topic).
+            Passes all available fields to build() so the expansion algorithm
+            can use keywords, key_points, representative_posts, or summaries.
         """
         return {
             t["topic_id"]: self.build(
                 topic_id=t["topic_id"],
                 headline=t.get("headline", ""),
                 keywords=t.get("keywords", []),
+                key_points=t.get("key_points"),
+                representative_posts=t.get("representative_posts"),
+                short_summary=t.get("short_summary", ""),
+                long_summary=t.get("long_summary", ""),
             )
             for t in topics
         }
+
+    # ------------------------------------------------------------------
+    # Keyword expansion
+    # ------------------------------------------------------------------
+
+    def _expand_keywords(
+        self,
+        keywords: list[str],
+        key_points: list[str] | None = None,
+    ) -> list[str]:
+        """
+        Expand the base keyword set using additional topic fields.
+
+        Current strategy: extract content words (length > 4) from key_points.
+        Swap this method to use embeddings, NER, or LLM paraphrase later.
+        """
+        expanded = list(keywords)
+        seen = {k.lower() for k in expanded}
+
+        if key_points:
+            for kp in key_points:
+                for word in kp.split():
+                    clean = word.strip('.,!?":;()[]').strip("'\"")
+                    if len(clean) > 4 and clean.lower() not in seen:
+                        seen.add(clean.lower())
+                        expanded.append(clean)
+
+        return expanded[:20]
 
     # ------------------------------------------------------------------
     # Strategy: per-stance query generation
@@ -409,6 +478,7 @@ class QueryBuilder:
                 query_string=q_string,
                 platform=platform,
                 intent=intent,
+                probability=_STANCE_PROBABILITY.get(stance, 0.5),
                 source_topic_id=topic_id,
                 source_keywords=keywords[:MAX_OR_TERMS],
                 metadata={"stance": stance},

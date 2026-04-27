@@ -68,6 +68,8 @@ class TopicOut(TypedDict):
     topic_id: int
     headline: str           # LLM-generated; empty string when no summarizer
     category: str           # LLM-generated; "Unknown" when no summarizer
+    short_summary: str      # 1-2 sentence summary for card/preview view
+    long_summary: str       # full paragraph for detail/expanded view
     keywords: list[str]
     key_points: list[str]   # LLM-generated; empty list when no summarizer
     n_posts: int
@@ -78,6 +80,7 @@ class TopicOut(TypedDict):
 class Section1Response(TypedDict):
     topics: list[TopicOut]
     total_posts_processed: int
+    digest: str             # overall feed digest across all topics (5-10 sentences)
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +98,7 @@ class SearchQueryOut(TypedDict):
     query_string: str
     platform: str               # "twitter" | "reddit" | "any"
     intent: str                 # "opposing" | "diverse" | "related" | "factual"
+    probability: float          # estimated probability of returning diverse results (0-1)
     source_topic_id: int
     source_keywords: list[str]
     metadata: dict
@@ -119,9 +123,11 @@ class Section3Request(TypedDict, total=False):
 
 
 class Section3Response(TypedDict):
-    posts: list[PostIn]
-    scores: list[float]         # diversity score per post, same order as posts
-    dropped: int                # posts removed by the cutoff threshold
+    balanced: list[PostIn]          # high-diversity posts → feed back into Section 1
+    balanced_scores: list[float]    # diversity score per balanced post
+    other: list[PostIn]             # lower-diversity posts still above minimum floor
+    other_scores: list[float]       # diversity score per other post
+    dropped: int                    # posts below minimum floor, discarded
 
 
 # ---------------------------------------------------------------------------

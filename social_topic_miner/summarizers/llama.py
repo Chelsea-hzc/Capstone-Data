@@ -9,7 +9,7 @@ e.g. meta-llama/Meta-Llama-3.1-8B-Instruct.
 from __future__ import annotations
 
 from ..config import SummarisationConfig
-from .base import BaseSummarizer, TopicSummary
+from .base import BaseSummarizer, TopicSummary, _DIGEST_SYSTEM_PROMPT
 
 
 class LlamaSummarizer(BaseSummarizer):
@@ -73,6 +73,21 @@ class LlamaSummarizer(BaseSummarizer):
         )
         raw = outputs[0]["generated_text"][len(prompt):].strip()
         return self._parse_response(topic_id, raw)
+
+    def summarize_digest(self, topic_summaries: list[TopicSummary]) -> str:
+        if not topic_summaries:
+            return ""
+        cfg = self.config
+        messages = [
+            {"role": "system", "content": _DIGEST_SYSTEM_PROMPT},
+            {"role": "user", "content": self._build_digest_user_prompt(topic_summaries)},
+        ]
+        prompt = self._tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        outputs = self._pipe(prompt, max_new_tokens=500, temperature=cfg.temperature, do_sample=cfg.do_sample)
+        raw = outputs[0]["generated_text"][len(prompt):].strip()
+        return raw or super().summarize_digest(topic_summaries)
 
     # ------------------------------------------------------------------
 
