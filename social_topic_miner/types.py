@@ -88,10 +88,16 @@ class Section1Response(TypedDict):
 # ---------------------------------------------------------------------------
 
 class Section2Request(TypedDict, total=False):
-    """Pass either ``topics`` (from Section 1) or bare ``headlines``/``keywords``."""
-    topics: list[TopicOut]      # preferred — direct output of section1()
-    headlines: list[str]        # alternative when topics are not available
-    keywords: list[str]         # alternative when topics are not available
+    """
+    Pass one of the following (checked in priority order):
+      topic   — single TopicOut from section1()  (preferred for per-topic calls)
+      topics  — list of TopicOut                 (batch mode)
+      headlines / keywords — manual override for testing
+    """
+    topic: TopicOut             # single topic — preferred for per-topic backend calls
+    topics: list[TopicOut]      # batch — all topics at once
+    headlines: list[str]        # manual override
+    keywords: list[str]         # manual override
 
 
 class SearchQueryOut(TypedDict):

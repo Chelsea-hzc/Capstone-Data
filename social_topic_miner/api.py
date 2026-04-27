@@ -178,9 +178,12 @@ class TopicMinerAPI:
         improved once the product direction for echo-chamber breaking is
         confirmed.  The schema will not change.
         """
-        topics = request.get("topics")
-        if topics:
-            # Pass the full TopicOut dict so build_batch() can use all fields
+        topic  = request.get("topic")   # single-topic path (priority)
+        topics = request.get("topics")  # batch path
+        if topic:
+            query_map = self._qbuilder.build_batch([topic])
+        elif topics:
+            # Pass full TopicOut dicts so build_batch() can use all fields
             # (keywords, key_points, representative_posts, summaries) for expansion.
             query_map = self._qbuilder.build_batch(list(topics))
         else:

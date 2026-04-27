@@ -309,19 +309,23 @@ Full schema: [`social_topic_miner/types.py → PostIn`](social_topic_miner/types
 ### Section 2 — Generate echo-breaking queries
 
 ```python
-# Normal flow — pass the full Section 1 topic output
+# Per-topic call (preferred) — one set of queries per topic
+response = api.section2({"topic": s1["topics"][0]})
+
+# Batch call — queries for all topics at once
 response = api.section2({"topics": s1["topics"]})
 
 # Manual override for testing
 response = api.section2({"headlines": ["AI safety cuts"], "keywords": ["AI", "safety"]})
 ```
 
-**Input** `Section2Request` — pass one of:
+**Input** `Section2Request` — pass one of (checked in priority order):
 
-| Option | Fields | When to use |
-|---|---|---|
-| From Section 1 | `{"topics": list[TopicOut]}` | Normal flow — all topic fields are used for keyword expansion |
-| Manual | `{"headlines": list[str], "keywords": list[str]}` | Testing / overrides |
+| Priority | Field | Type | When to use |
+|---|---|---|---|
+| 1 | `topic` | `TopicOut` | Single-topic call — lets backend fetch per topic independently |
+| 2 | `topics` | `list[TopicOut]` | Batch — all topics at once |
+| 3 | `headlines` + `keywords` | `list[str]` each | Manual override for testing |
 
 The builder uses the full `TopicOut` dict internally: `keywords` and `key_points` feed keyword expansion; `headline` drives NER anchor extraction (spaCy); `representative_posts` is reserved for future embedding-based expansion.
 
@@ -389,10 +393,10 @@ all_bubble_keywords = [kw for t in s1["topics"] for kw in t["keywords"]]
 
 ```python
 {
-  "balanced":        list[PostIn],  # score ≥ balanced_threshold (default 0.50)
+  "balanced":        list[PostIn],  # score ≥ balanced_threshold (default 0.40)
                                     # → feed these back into Section 1 for the Balanced tab
   "balanced_scores": list[float],   # diversity score per balanced post (same order)
-  "other":           list[PostIn],  # min_score ≤ score < balanced_threshold (default 0.30–0.50)
+  "other":           list[PostIn],  # min_score ≤ score < balanced_threshold (default 0.28–0.40)
                                     # → show as flat ranked list in the Other tab
   "other_scores":    list[float],   # diversity score per other post (same order)
   "dropped":         int            # posts below min_diversity_score, discarded
@@ -403,6 +407,9 @@ Both lists are sorted by diversity score descending.  The combined size is cappe
 
 **Recommended backend flow:**
 ```python
+# Collect all keywords from Section 1 for relevance scoring
+all_bubble_keywords = [kw for t in s1["topics"] for kw in t["keywords"]]
+
 s3 = api.section3({"new_posts": search_results, "bubble_keywords": all_bubble_keywords})
 
 # Tab 2 — Balanced: re-cluster the diverse posts
@@ -416,9 +423,17 @@ other_posts = s3["other"]
 
 | Component | Weight | Current implementation |
 |---|---|---|
-| Relevance | 0.40 | Keyword overlap with bubble topics |
-| Divergence | 0.40 | 1 − cosine similarity to bubble centroid (requires embedder) |
+| Relevance | 0.40 | Precision keyword overlap: matching words ÷ post word count |
+| Divergence | 0.40 | 1 − cosine similarity to bubble centroid (requires embedder; 0.5 fallback) |
 | Recency | 0.20 | Uniform 0.5 placeholder (timestamp decay TODO) |
+
+**Score ranges without embeddings** (divergence = 0.5, recency = 0.5):
+
+| Relevance | Score | Bucket |
+|---|---|---|
+| 0% keyword overlap | 0.30 | other |
+| ~25% keyword overlap | ~0.40 | balanced |
+| 50%+ keyword overlap | 0.50+ | balanced |
 
 > Thresholds (`balanced_threshold`, `min_diversity_score`) and weights are configurable via `DiversityFilterConfig`.
 
@@ -551,8 +566,8 @@ config = TopicMinerConfig(
     sampling=SamplingConfig(recency_window_hours=48, target_max=12),
 )
 diversity_config = DiversityFilterConfig(
-    balanced_threshold=0.55,     # raise to make Balanced tab stricter
-    min_diversity_score=0.25,    # lower to keep more posts in Other tab
+    balanced_threshold=0.45,     # default 0.40 — raise to make Balanced tab stricter
+    min_diversity_score=0.25,    # default 0.28 — lower to keep more posts in Other tab
     max_posts_out=30,
 )
 api = TopicMinerAPI(config=config, diversity_config=diversity_config)

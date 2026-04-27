@@ -25,10 +25,10 @@ logger = logging.getLogger(__name__)
 @dataclass
 class DiversityFilterConfig:
     # --- Cutoffs ---
-    min_diversity_score: float = 0.30
+    min_diversity_score: float = 0.28
     """Posts scoring below this are dropped entirely (neither list receives them)."""
 
-    balanced_threshold: float = 0.50
+    balanced_threshold: float = 0.40
     """Posts at or above this go into 'balanced' (→ feed back into Section 1).
     Posts in [min_diversity_score, balanced_threshold) go into 'other'."""
 
@@ -222,7 +222,10 @@ class DiversityFilter:
         scores = []
         for text in texts:
             words = set(text.lower().split())
-            overlap = len(words & kw_set) / max(len(kw_set), 1)
+            # Precision-based: what fraction of the POST's words match bubble keywords.
+            # Using len(words) as denominator prevents scores from collapsing when
+            # bubble_keywords is large (e.g. all keywords from 4+ topics combined).
+            overlap = len(words & kw_set) / max(len(words), 1)
             scores.append(min(overlap, 1.0))
         return scores
 
