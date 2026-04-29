@@ -47,8 +47,8 @@ class EmbedderConfig:
 
 @dataclass
 class UMAPConfig:
-    n_neighbors: int = 8
-    n_components: int = 10
+    n_neighbors: int = 5
+    n_components: int = 5
     min_dist: float = 0.0
     metric: str = "cosine"
     random_state: int = 42
@@ -81,19 +81,19 @@ class SelectionConfig:
     top_n_topics: int = 5
     """How many top-ranked topics to carry forward."""
 
-    weight_size: float = 0.40
+    weight_size: float = 0.50
     """Composite score weight: number of posts."""
 
-    weight_total_engagement: float = 0.35
+    weight_total_engagement: float = 0
     """Composite score weight: total normalised engagement."""
 
-    weight_avg_engagement: float = 0.25
+    weight_avg_engagement: float = 0.55
     """Composite score weight: per-post normalised engagement."""
 
-    twitter_reply_weight: float = 1.5
-    twitter_share_weight: float = 2.0
+    twitter_reply_weight: float = 1.0
+    twitter_share_weight: float = 1.0
     twitter_like_weight: float = 1.0
-    reddit_comment_weight: float = 1.5
+    reddit_comment_weight: float = 1.0
     reddit_like_weight: float = 1.0
 
 
