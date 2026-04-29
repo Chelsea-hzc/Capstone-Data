@@ -6,6 +6,8 @@ To plug in a new LLM, subclass BaseSummarizer and implement ``summarize()``.
 
 from __future__ import annotations
 
+import logging
+
 import json
 import re
 from abc import ABC, abstractmethod
@@ -13,6 +15,7 @@ from dataclasses import dataclass, field
 
 from ..config import SummarisationConfig
 
+logger = logging.getLogger(__name__)
 
 @dataclass
 class TopicSummary:
@@ -121,17 +124,36 @@ class BaseSummarizer(ABC):
         text = raw.strip()
         # Strip markdown code fences if present
         match = _JSON_BLOCK_RE.search(text)
+        logger.info("Parse Response from raw strip %s and json match %s", text, match)
         if match:
             text = match.group(1).strip()
 
         try:
             data = json.loads(text)
         except json.JSONDecodeError:
-            # Graceful fallback — return what we have
+            # Claude sometimes adds preamble text before the JSON object;
+            # try to extract the first {...} block directly.
+            brace_match = re.search(r"\{.*\}", text, re.DOTALL)
+            if brace_match:
+                try:
+                    data = json.loads(brace_match.group(0))
+                except json.JSONDecodeError:
+                    pass
+                else:
+                    # Successfully parsed via brace extraction — fall through
+                    return TopicSummary(
+                        topic_id=topic_id,
+                        category=data.get("category", "Unknown"),
+                        headline=data.get("headline", ""),
+                        short_summary=data.get("short_summary", ""),
+                        long_summary=data.get("long_summary", ""),
+                        key_points=data.get("key_points", []),
+                        raw_response=raw,
+                    )
             return TopicSummary(
                 topic_id=topic_id,
                 category="Unknown",
-                headline=text[:120],
+                headline="",
                 key_points=[],
                 raw_response=raw,
             )

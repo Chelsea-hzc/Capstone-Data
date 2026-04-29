@@ -146,7 +146,8 @@ class SamplingConfig:
 
 @dataclass
 class SummarisationConfig:
-    max_new_tokens: int = 256
+    max_topic_summarize_tokens: int = 1024
+    max_digest_tokens: int = 256
     temperature: float = 0.1
     """Generation temperature (used when do_sample=True)."""
 

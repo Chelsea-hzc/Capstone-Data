@@ -48,13 +48,14 @@ class OpenAISummarizer(BaseSummarizer):
                 {"role": "system", "content": self.SYSTEM_PROMPT},
                 {"role": "user", "content": self._build_user_prompt(posts, keywords)},
             ],
-            max_tokens=cfg.max_new_tokens,
+            max_tokens=cfg.max_topic_summarize_tokens,
             temperature=cfg.temperature,
         )
         raw = response.choices[0].message.content or ""
         return self._parse_response(topic_id, raw)
 
     def summarize_digest(self, topic_summaries: list[TopicSummary]) -> str:
+        cfg = self.config
         if not topic_summaries:
             return ""
         response = self._client.chat.completions.create(
@@ -63,7 +64,7 @@ class OpenAISummarizer(BaseSummarizer):
                 {"role": "system", "content": _DIGEST_SYSTEM_PROMPT},
                 {"role": "user", "content": self._build_digest_user_prompt(topic_summaries)},
             ],
-            max_tokens=500,
+            max_tokens=cfg.max_digest_tokens,
             temperature=0.7,
         )
         return response.choices[0].message.content or super().summarize_digest(topic_summaries)

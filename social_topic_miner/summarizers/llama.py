@@ -67,7 +67,7 @@ class LlamaSummarizer(BaseSummarizer):
         )
         outputs = self._pipe(
             prompt,
-            max_new_tokens=cfg.max_new_tokens,
+            max_new_tokens=cfg.max_topic_summarize_tokens,
             temperature=cfg.temperature,
             do_sample=cfg.do_sample,
         )
@@ -85,7 +85,7 @@ class LlamaSummarizer(BaseSummarizer):
         prompt = self._tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
         )
-        outputs = self._pipe(prompt, max_new_tokens=500, temperature=cfg.temperature, do_sample=cfg.do_sample)
+        outputs = self._pipe(prompt, max_new_tokens=cfg.max_digest_tokens, temperature=cfg.temperature, do_sample=cfg.do_sample)
         raw = outputs[0]["generated_text"][len(prompt):].strip()
         return raw or super().summarize_digest(topic_summaries)
 

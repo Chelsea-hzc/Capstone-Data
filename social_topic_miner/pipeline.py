@@ -144,6 +144,7 @@ class TopicMinerPipeline:
 
         # 5. Sample representative posts
         sampled_topics = self._sampler.sample(df, embeddings, selected_ids)
+        logger.info("%s Sampled Topics : %s", len(sampled_topics),sampled_topics) 
 
         # 6. Assemble results (+ optional summarisation)
         topic_results: list[TopicResult] = []
@@ -162,14 +163,18 @@ class TopicMinerPipeline:
                 for idx in st.selected_indices
             ]
 
+            logger.info("For Sampled Topic id %s: keyword is %s and posts are %s ", tid, keywords, posts_rows) 
+            # logger.info("Use summarize %s", self.summarizer)
             summary: TopicSummary | None = None
             if self.summarizer is not None:
+                logger.info("Call summarize %s for topic %s", self.summarizer, tid)
                 try:
                     summary = self.summarizer.summarize(
                         topic_id=tid,
                         posts=[r["text"] for r in posts_rows],
                         keywords=keywords,
                     )
+                    logger.info("Summary %s ", summary)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("Summarisation failed for topic %d: %s", tid, exc)
 
