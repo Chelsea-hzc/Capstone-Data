@@ -247,11 +247,15 @@ def build_query(
 # Anchor extraction
 # ---------------------------------------------------------------------------
 
-def _extract_anchors_spacy(headline: str) -> list[str]:
-    """
-    Extract named entities from *headline* using spaCy.
+_ANCHOR_ENTITY_TYPES = {"ORG", "PERSON", "GPE", "PRODUCT", "EVENT", "NORP"}
 
-    Returns a deduplicated list of entity strings (original case).
+
+def _extract_anchors_spacy(text: str) -> list[str]:
+    """
+    Extract named entities from *text* using spaCy.
+
+    Only keeps entity types useful as search anchors (ORG, PERSON, GPE,
+    PRODUCT, EVENT, NORP) and drops entities longer than 2 words.
     Falls back to an empty list if spaCy is not installed or the model
     is not available (caller then uses keyword fallback).
     """
@@ -261,22 +265,40 @@ def _extract_anchors_spacy(headline: str) -> list[str]:
             nlp = spacy.load("en_core_web_sm")
         except OSError:
             return []
-        doc = nlp(headline)
+        doc = nlp(text)
         seen: set[str] = set()
         anchors: list[str] = []
         for ent in doc.ents:
-            text = ent.text.strip()
-            if text and text.lower() not in seen:
-                seen.add(text.lower())
-                anchors.append(text)
+            if ent.label_ not in _ANCHOR_ENTITY_TYPES:
+                continue
+            raw = ent.text.strip()
+            if not raw or len(raw.split()) > 2:
+                continue
+            if raw.lower() not in seen:
+                seen.add(raw.lower())
+                anchors.append(raw)
+        logger.info("spaCy anchor entities: %s", anchors)
         return anchors
     except ImportError:
         return []
 
 
-def _extract_anchors(headline: str, keywords: list[str]) -> list[str]:
-    """Return NER anchors from headline, falling back to top keywords."""
+def _extract_anchors(
+    headline: str,
+    keywords: list[str],
+    long_summary: str = "",
+) -> list[str]:
+    """Return NER anchors from headline + long_summary, falling back to top keywords."""
     anchors = _extract_anchors_spacy(headline)
+
+    # Also run NER on long_summary to pick up entities missed in the headline
+    if long_summary:
+        seen = {a.lower() for a in anchors}
+        for ent in _extract_anchors_spacy(long_summary):
+            if ent.lower() not in seen:
+                seen.add(ent.lower())
+                anchors.append(ent)
+
     if not anchors:
         # Fallback: treat the top two title-case words in keywords as anchors
         anchors = [kw for kw in keywords[:4] if kw and kw[0].isupper()]
@@ -353,18 +375,25 @@ class QueryBuilder:
         short_summary:         1-2 sentence summary (reserved for future use)
         long_summary:          full paragraph summary (reserved for future use)
         """
+
+        logger.info("Topic %d : keywords is %s keypoints is %s headline is %s ", topic_id, keywords, key_points, headline)
+
         expanded_keywords = self._expand_keywords(
             keywords=keywords,
             key_points=key_points,
         )
 
+        logger.info("Expanded Keywords %s ", expanded_keywords)
+
         if self.config.use_llm and self.summarizer is not None:
             anchor_terms, bridge_terms = self._llm_anchor_bridge(
                 topic_id, headline, expanded_keywords
             )
+            logger.info("With LLM anchor terms are %s and bridge terms are %s", anchor_terms, bridge_terms)
         else:
-            anchor_terms = _extract_anchors(headline, expanded_keywords)
+            anchor_terms = _extract_anchors(headline, expanded_keywords, long_summary)
             bridge_terms = [kw for kw in expanded_keywords if kw not in anchor_terms]
+            logger.info("WITHOUT LLM anchor terms are %s and bridge terms are %s", anchor_terms, bridge_terms)
 
         queries = self._build_stance_queries(
             topic_id=topic_id,

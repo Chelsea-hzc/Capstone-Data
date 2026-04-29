@@ -36,7 +36,7 @@ _JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
 _DIGEST_SYSTEM_PROMPT = (
     "You are a senior news editor. You will receive a list of trending topics "
     "from a user's social media feed.\n"
-    "Write a neutral, informative digest of 5-10 sentences that captures the "
+    "Write a neutral, informative digest of 2-3 sentences that captures the "
     "overall themes and key highlights across all topics.\n"
     "Plain text only — no bullet points, no headers, no markdown."
 )
