@@ -271,12 +271,13 @@ def _extract_anchors_spacy(text: str) -> list[str]:
         for ent in doc.ents:
             if ent.label_ not in _ANCHOR_ENTITY_TYPES:
                 continue
-            raw = ent.text.strip()
+            raw = ent.text.strip().strip("'\"'‘’“”")
             if not raw or len(raw.split()) > 2:
                 continue
             if raw.lower() not in seen:
                 seen.add(raw.lower())
                 anchors.append(raw)
+            logger.info("spaCy anchor ent %s and raw %s", ent, raw)
         logger.info("spaCy anchor entities: %s", anchors)
         return anchors
     except ImportError:

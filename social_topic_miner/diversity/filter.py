@@ -163,18 +163,54 @@ class DiversityFilter:
         balanced_pairs.sort(key=lambda x: -x[1])
         other_pairs.sort(key=lambda x: -x[1])
 
+        # Adaptive threshold: if one bucket is empty, redistribute so that
+        # ~30% of surviving posts end up in the smaller bucket.
+        adaptive_threshold: float | None = None
+        surviving = balanced_pairs + other_pairs
+        surviving.sort(key=lambda x: -x[1])
+
+        if surviving:
+            if not balanced_pairs and other_pairs:
+                # All posts fell below balanced_threshold — promote top 70%
+                split = max(1, int(len(surviving) * 0.70))
+                balanced_pairs = surviving[:split]
+                other_pairs = surviving[split:]
+                adaptive_threshold = balanced_pairs[-1][1]
+                logger.warning(
+                    "DiversityFilter: balanced bucket empty — adaptive threshold "
+                    "lowered to %.3f (top 70%% of survivors promoted)",
+                    adaptive_threshold,
+                )
+            elif not other_pairs and balanced_pairs:
+                # All posts were above balanced_threshold — demote bottom 30%
+                split = max(1, int(len(surviving) * 0.70))
+                balanced_pairs = surviving[:split]
+                other_pairs = surviving[split:]
+                adaptive_threshold = other_pairs[0][1]
+                logger.warning(
+                    "DiversityFilter: other bucket empty — adaptive threshold "
+                    "raised to %.3f (bottom 30%% of balanced demoted)",
+                    adaptive_threshold,
+                )
+
         # Apply max_posts_out across both lists (balanced takes priority)
         remaining = cfg.max_posts_out
         balanced_pairs = balanced_pairs[:remaining]
         remaining -= len(balanced_pairs)
         other_pairs = other_pairs[:max(remaining, 0)]
 
+        metadata: dict = {}
+        if adaptive_threshold is not None:
+            metadata["adaptive_threshold"] = True
+            metadata["adjusted_balanced_threshold"] = adaptive_threshold
+
         logger.info(
             "DiversityFilter: %d in → %d balanced, %d other, %d dropped "
-            "(thresholds: balanced≥%.2f, min≥%.2f)",
+            "(thresholds: balanced≥%.2f, min≥%.2f%s)",
             before,
             len(balanced_pairs), len(other_pairs), dropped,
             cfg.balanced_threshold, cfg.min_diversity_score,
+            " [adaptive]" if adaptive_threshold is not None else "",
         )
         return DiversityResult(
             balanced=[p for p, _ in balanced_pairs],
@@ -182,6 +218,7 @@ class DiversityFilter:
             other=[p for p, _ in other_pairs],
             other_scores=[s for _, s in other_pairs],
             dropped=dropped,
+            metadata=metadata,
         )
 
     # ------------------------------------------------------------------
