@@ -39,9 +39,58 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-MAX_OR_TERMS = 5
+MAX_OR_TERMS = 4
 """Hard cap on terms inside a single OR block.  Twitter v2 returns 0 results
-for OR blocks longer than ~6 terms; 5 gives a small safety margin."""
+for OR blocks longer than ~6 terms; 4 gives a safe margin."""
+
+MAX_QUERY_LENGTH = 350
+"""Twitter v2 query character limit."""
+
+_STOPWORDS = {
+    # Articles / determiners
+    "a", "an", "the", "this", "that", "these", "those", "some", "any", "each",
+    "every", "both", "all", "few", "more", "most", "other", "such", "no",
+    # Pronouns
+    "i", "me", "my", "myself", "we", "our", "ours", "ourselves", "you", "your",
+    "yours", "yourself", "yourselves", "he", "him", "his", "himself", "she",
+    "her", "hers", "herself", "it", "its", "itself", "they", "them", "their",
+    "theirs", "themselves", "what", "which", "who", "whom", "this", "that",
+    # Prepositions
+    "in", "on", "at", "by", "for", "with", "about", "against", "between",
+    "into", "through", "during", "before", "after", "above", "below", "to",
+    "from", "up", "down", "out", "off", "over", "under", "again", "further",
+    "then", "once", "upon", "within", "without", "among", "along", "around",
+    "onto", "toward", "towards", "beyond", "behind", "beside", "across",
+    # Conjunctions
+    "and", "but", "or", "nor", "so", "yet", "for", "if", "as", "than",
+    "because", "since", "while", "although", "though", "unless", "until",
+    "when", "where", "whether", "either", "neither", "both", "not", "also",
+    "however", "therefore", "otherwise", "meanwhile", "furthermore",
+    # Auxiliary / modal verbs
+    "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
+    "do", "does", "did", "will", "would", "could", "should", "may", "might",
+    "must", "shall", "can", "need", "dare", "ought", "used",
+    # Common adverbs
+    "very", "really", "just", "still", "also", "only", "even", "already",
+    "always", "never", "often", "sometimes", "usually", "here", "there",
+    "now", "then", "too", "quite", "rather", "much", "many", "more", "most",
+    "less", "least", "well", "back", "away", "ever", "soon", "later",
+    # Common short/noise words from social media / BERTopic
+    "vs", "pro", "via", "per", "etc", "new", "one", "two", "yes", "non",
+    "get", "got", "say", "said", "says", "make", "made", "take", "took",
+    "come", "came", "give", "gave", "know", "knew", "look", "like", "want",
+    "going", "come", "think", "seen", "told", "goes", "went", "let", "put",
+    "im", "ive", "its", "isnt", "dont", "doesnt", "cant", "wont", "wasnt",
+    "weren", "hasnt", "havent", "wouldnt", "shouldnt", "couldnt",
+    # Common generic nouns / process words
+    "thing", "things", "time", "year", "years", "month", "week", "day",
+    "people", "person", "part", "place", "point", "case", "fact", "number",
+    "way", "use", "using", "used", "work", "works", "working", "based",
+    "including", "according", "following", "regarding", "related", "using",
+    "approval", "combined", "compliance", "entity", "filing", "foreign",
+    "funding", "merger", "needed", "ownership", "percent", "process",
+    "proposed", "regulatory", "required", "requesting", "review", "various",
+}
 
 # Stance taxonomy derived from the query-expansion experiments notebook.
 # 10 categories, 279 total terms.  The five PRIMARY stances map to QueryIntent.
@@ -103,7 +152,7 @@ STANCE_DICT: dict[str, list[str]] = {
 _PRIMARY_STANCES = ["neutral", "supportive", "critical", "emotional", "industry"]
 
 # Twitter-specific suffix appended to every generated query
-_TWITTER_FILTER = "-is:retweet lang:en"
+# _TWITTER_FILTER = "-is:retweet lang:en"
 
 
 # ---------------------------------------------------------------------------
@@ -163,8 +212,11 @@ _STANCE_PROBABILITY: dict[str, float] = {
 
 @dataclass
 class QueryBuilderConfig:
-    max_queries_per_topic: int = 5
-    """Queries emitted per topic.  5 = one per primary stance."""
+    n_twitter_queries: int = 5
+    """Exact number of Twitter queries to emit per topic (one per primary stance)."""
+
+    n_reddit_queries: int = 3
+    """Exact number of Reddit queries to emit per topic (cycles headline then key_points)."""
 
     intents: list[QueryIntent] = field(default_factory=lambda: [
         QueryIntent.OPPOSING,
@@ -182,7 +234,7 @@ class QueryBuilderConfig:
     to top keywords), then pair with STANCE_DICT terms directly.
     """
 
-    add_twitter_filters: bool = True
+    add_twitter_filters: bool = False
     """Append ``-is:retweet lang:en`` to Twitter queries."""
 
     primary_stances: list[str] = field(
@@ -237,8 +289,8 @@ def build_query(
 
     query = " ".join(blocks)
 
-    if add_filters and platform == "twitter":
-        query = f"{query} {_TWITTER_FILTER}"
+    # if add_filters and platform == "twitter":
+    #     query = f"{query} {_TWITTER_FILTER}"
 
     return query.strip()
 
@@ -392,8 +444,8 @@ class QueryBuilder:
             )
             logger.info("With LLM anchor terms are %s and bridge terms are %s", anchor_terms, bridge_terms)
         else:
-            anchor_terms = _extract_anchors(headline, expanded_keywords, long_summary)
-            bridge_terms = [kw for kw in expanded_keywords if kw not in anchor_terms]
+            anchor_terms = [t for t in _extract_anchors(headline, expanded_keywords, long_summary) if t and t.strip()]
+            bridge_terms = [kw for kw in expanded_keywords if kw not in anchor_terms and kw.strip()]
             logger.info("WITHOUT LLM anchor terms are %s and bridge terms are %s", anchor_terms, bridge_terms)
 
         queries = self._build_stance_queries(
@@ -401,13 +453,23 @@ class QueryBuilder:
             anchor_terms=anchor_terms,
             bridge_terms=bridge_terms,
             keywords=expanded_keywords,
+            headline=headline,
+            key_points=key_points,
         )
 
-        # Sort highest-probability first so the backend can send top-N
-        queries.sort(key=lambda q: -q.probability)
+        # Twitter sorted by probability desc; Reddit appended after
+        twitter_queries = sorted(
+            [q for q in queries if q.platform == "twitter"],
+            key=lambda q: -q.probability,
+        )
+        reddit_queries = [q for q in queries if q.platform == "reddit"]
 
-        logger.info("Topic %d → %d queries generated", topic_id, len(queries))
-        return queries[: self.config.max_queries_per_topic]
+        result = twitter_queries + reddit_queries
+        logger.info(
+            "Topic %d → %d twitter + %d reddit queries",
+            topic_id, len(twitter_queries), len(reddit_queries),
+        )
+        return result
 
     def build_batch(
         self,
@@ -451,18 +513,22 @@ class QueryBuilder:
         Current strategy: extract content words (length > 4) from key_points.
         Swap this method to use embeddings, NER, or LLM paraphrase later.
         """
-        expanded = list(keywords)
+        expanded = [k for k in keywords if k and k.strip() and k.lower() not in _STOPWORDS]
         seen = {k.lower() for k in expanded}
 
         if key_points:
             for kp in key_points:
                 for word in kp.split():
                     clean = word.strip('.,!?":;()[]').strip("'\"")
-                    if len(clean) > 4 and clean.lower() not in seen:
+                    if (
+                        len(clean) > 4
+                        and clean.lower() not in seen
+                        and clean.lower() not in _STOPWORDS
+                    ):
                         seen.add(clean.lower())
                         expanded.append(clean)
 
-        return expanded[:20]
+        return [k for k in expanded if k and k.strip()][:20]
 
     # ------------------------------------------------------------------
     # Strategy: per-stance query generation
@@ -474,44 +540,100 @@ class QueryBuilder:
         anchor_terms: list[str],
         bridge_terms: list[str],
         keywords: list[str],
+        headline: str = "",
+        key_points: list[str] | None = None,
     ) -> list[SearchQuery]:
         """
         Generate one query per stance in config.primary_stances.
 
-        Each query follows the pattern:
-            (anchors) (bridge_terms) (stance_terms) [filters]
+        Twitter: (anchors) (bridge_terms) (stance_terms) [filters]
+        Reddit:  alternates between headline and key_points as plain-text queries.
 
         The primary platform alternates: twitter for odd stances, reddit
         for even stances, to spread coverage across platforms.
         """
         queries: list[SearchQuery] = []
-        platforms = self.config.platforms or ["twitter", "reddit"]
+        cfg = self.config
+        add_filters = cfg.add_twitter_filters
 
-        for i, stance in enumerate(self.config.primary_stances):
+        # --- Twitter: one query per primary stance, exactly n_twitter_queries ---
+        stances = list(cfg.primary_stances)
+        while len(stances) < cfg.n_twitter_queries:
+            stances += list(cfg.primary_stances)
+
+        for stance in stances[:cfg.n_twitter_queries]:
             stance_terms = STANCE_DICT.get(stance, [])[:MAX_OR_TERMS]
             if not stance_terms:
-                continue
-
-            platform = platforms[i % len(platforms)]
-            add_filters = self.config.add_twitter_filters
+                stance_terms = STANCE_DICT["neutral"][:MAX_OR_TERMS]
 
             q_string = build_query(
                 anchor_terms=anchor_terms,
                 bridge_terms=bridge_terms,
                 stance_terms=stance_terms,
-                platform=platform,
+                platform="twitter",
                 add_filters=add_filters,
             )
-            intent = _STANCE_TO_INTENT.get(stance, QueryIntent.DIVERSE)
+            if len(q_string) > MAX_QUERY_LENGTH:
+                for n_bridge in range(len(bridge_terms) - 1, -1, -1):
+                    q_string = build_query(
+                        anchor_terms=anchor_terms,
+                        bridge_terms=bridge_terms[:n_bridge],
+                        stance_terms=stance_terms,
+                        platform="twitter",
+                        add_filters=add_filters,
+                    )
+                    if len(q_string) <= MAX_QUERY_LENGTH:
+                        break
+            if len(q_string) > MAX_QUERY_LENGTH:
+                for n_stance in range(len(stance_terms) - 1, 0, -1):
+                    q_string = build_query(
+                        anchor_terms=anchor_terms,
+                        bridge_terms=[],
+                        stance_terms=stance_terms[:n_stance],
+                        platform="twitter",
+                        add_filters=add_filters,
+                    )
+                    if len(q_string) <= MAX_QUERY_LENGTH:
+                        break
+            if len(q_string) > MAX_QUERY_LENGTH:
+                for n_anchor in range(len(anchor_terms) - 1, 0, -1):
+                    q_string = build_query(
+                        anchor_terms=anchor_terms[:n_anchor],
+                        bridge_terms=[],
+                        stance_terms=stance_terms[:1],
+                        platform="twitter",
+                        add_filters=add_filters,
+                    )
+                    if len(q_string) <= MAX_QUERY_LENGTH:
+                        break
+            if len(q_string) > MAX_QUERY_LENGTH:
+                logger.warning(
+                    "Twitter query topic %d stance %s still exceeds %d chars (%d)",
+                    topic_id, stance, MAX_QUERY_LENGTH, len(q_string),
+                )
 
             queries.append(SearchQuery(
                 query_string=q_string,
-                platform=platform,
-                intent=intent,
+                platform="twitter",
+                intent=_STANCE_TO_INTENT.get(stance, QueryIntent.DIVERSE),
                 probability=_STANCE_PROBABILITY.get(stance, 0.5),
                 source_topic_id=topic_id,
                 source_keywords=keywords[:MAX_OR_TERMS],
                 metadata={"stance": stance},
+            ))
+
+        # --- Reddit: cycle headline then key_points, exactly n_reddit_queries ---
+        reddit_sources = [headline] + (key_points or [])
+        for j in range(cfg.n_reddit_queries):
+            q_string = reddit_sources[j % len(reddit_sources)] if reddit_sources else headline
+            queries.append(SearchQuery(
+                query_string=q_string,
+                platform="reddit",
+                intent=QueryIntent.DIVERSE,
+                probability=0.60,
+                source_topic_id=topic_id,
+                source_keywords=keywords[:MAX_OR_TERMS],
+                metadata={"stance": "reddit_plain"},
             ))
 
         return queries
