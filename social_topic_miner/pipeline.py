@@ -117,82 +117,11 @@ class TopicMinerPipeline:
         """Accept an already-loaded raw DataFrame and run the full pipeline."""
         df = self.normalizer.from_dataframe(df)
         return self._run(df)
-
+        
     # ------------------------------------------------------------------
-    # Internal stages
+    # partition
     # ------------------------------------------------------------------
-
-    def _run(self, df: pd.DataFrame) -> PipelineResult:
-        logger.info("Posts after preprocessing: %d", len(df))
-
-        # 1. Embed
-        docs = df["text"].tolist()
-        logger.info("Embedding %d docs …", len(docs))
-        embeddings = self.embedder.embed(docs)
-
-        # 2. Cluster
-        cluster_result = self._clusterer.fit(docs, embeddings)
-        df["topic_id"] = cluster_result.topic_ids
-
-        # 3. Score & select top-N topics
-        df = self._scorer.add_engagement_columns(df)
-        selected_ids = self._scorer.top_topic_ids(df)
-        logger.info("Selected topics: %s", selected_ids)
-
-        # 4. Sub-perspective partitioning
-        df = self._partitioner.partition(df, embeddings, selected_ids)
-
-        # 5. Sample representative posts
-        sampled_topics = self._sampler.sample(df, embeddings, selected_ids)
-        logger.info("%s Sampled Topics : %s", len(sampled_topics),sampled_topics) 
-
-        # 6. Assemble results (+ optional summarisation)
-        topic_results: list[TopicResult] = []
-        for st in sampled_topics:
-            tid = st.topic_id
-            keywords = self._clusterer.get_keywords(tid)
-            posts_rows = [
-                {
-                    "text": df.loc[idx, "text"],
-                    "platform": df.loc[idx, "platform"],
-                    "sub_perspective": int(df.loc[idx, "sub_perspective"]),
-                    "engagement_norm": float(df.loc[idx, "engagement_norm"]),
-                    "post_id": df.loc[idx, "post_id"],
-                    "created_at": str(df.loc[idx, "created_at"]),
-                }
-                for idx in st.selected_indices
-            ]
-
-            logger.info("For Sampled Topic id %s: keyword is %s and posts are %s ", tid, keywords, posts_rows) 
-            # logger.info("Use summarize %s", self.summarizer)
-            summary: TopicSummary | None = None
-            if self.summarizer is not None:
-                logger.info("Call summarize %s for topic %s", self.summarizer, tid)
-                try:
-                    summary = self.summarizer.summarize(
-                        topic_id=tid,
-                        posts=[r["text"] for r in posts_rows],
-                        keywords=keywords,
-                    )
-                    logger.info("Summary %s ", summary)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("Summarisation failed for topic %d: %s", tid, exc)
-
-            topic_results.append(TopicResult(
-                topic_id=tid,
-                keywords=keywords,
-                n_posts=int((df["topic_id"] == tid).sum()),
-                n_perspectives=st.n_perspectives,
-                representative_posts=posts_rows,
-                summary=summary,
-            ))
-
-        return PipelineResult(
-            topics=topic_results,
-            df=df,
-            embeddings=embeddings,
-        )
-
+    
     def partition_and_summarize(
     self,
     df: pd.DataFrame,
@@ -282,6 +211,81 @@ class TopicMinerPipeline:
         representative_posts=posts_rows,
         summary=summary,
     )
+
+    # ------------------------------------------------------------------
+    # Internal stages
+    # ------------------------------------------------------------------
+
+    def _run(self, df: pd.DataFrame) -> PipelineResult:
+        logger.info("Posts after preprocessing: %d", len(df))
+
+        # 1. Embed
+        docs = df["text"].tolist()
+        logger.info("Embedding %d docs …", len(docs))
+        embeddings = self.embedder.embed(docs)
+
+        # 2. Cluster
+        cluster_result = self._clusterer.fit(docs, embeddings)
+        df["topic_id"] = cluster_result.topic_ids
+
+        # 3. Score & select top-N topics
+        df = self._scorer.add_engagement_columns(df)
+        selected_ids = self._scorer.top_topic_ids(df)
+        logger.info("Selected topics: %s", selected_ids)
+
+        # 4. Sub-perspective partitioning
+        df = self._partitioner.partition(df, embeddings, selected_ids)
+
+        # 5. Sample representative posts
+        sampled_topics = self._sampler.sample(df, embeddings, selected_ids)
+        logger.info("%s Sampled Topics : %s", len(sampled_topics),sampled_topics) 
+
+        # 6. Assemble results (+ optional summarisation)
+        topic_results: list[TopicResult] = []
+        for st in sampled_topics:
+            tid = st.topic_id
+            keywords = self._clusterer.get_keywords(tid)
+            posts_rows = [
+                {
+                    "text": df.loc[idx, "text"],
+                    "platform": df.loc[idx, "platform"],
+                    "sub_perspective": int(df.loc[idx, "sub_perspective"]),
+                    "engagement_norm": float(df.loc[idx, "engagement_norm"]),
+                    "post_id": df.loc[idx, "post_id"],
+                    "created_at": str(df.loc[idx, "created_at"]),
+                }
+                for idx in st.selected_indices
+            ]
+
+            logger.info("For Sampled Topic id %s: keyword is %s and posts are %s ", tid, keywords, posts_rows) 
+            # logger.info("Use summarize %s", self.summarizer)
+            summary: TopicSummary | None = None
+            if self.summarizer is not None:
+                logger.info("Call summarize %s for topic %s", self.summarizer, tid)
+                try:
+                    summary = self.summarizer.summarize(
+                        topic_id=tid,
+                        posts=[r["text"] for r in posts_rows],
+                        keywords=keywords,
+                    )
+                    logger.info("Summary %s ", summary)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Summarisation failed for topic %d: %s", tid, exc)
+
+            topic_results.append(TopicResult(
+                topic_id=tid,
+                keywords=keywords,
+                n_posts=int((df["topic_id"] == tid).sum()),
+                n_perspectives=st.n_perspectives,
+                representative_posts=posts_rows,
+                summary=summary,
+            ))
+
+        return PipelineResult(
+            topics=topic_results,
+            df=df,
+            embeddings=embeddings,
+        )
     
     # ------------------------------------------------------------------
     # Convenience: pretty-print results
