@@ -303,34 +303,52 @@ _ANCHOR_ENTITY_TYPES = {"ORG", "PERSON", "GPE", "PRODUCT", "EVENT", "NORP"}
 
 
 def _extract_anchors_spacy(text: str) -> list[str]:
-    """
-    Extract named entities from *text* using spaCy.
-
-    Only keeps entity types useful as search anchors (ORG, PERSON, GPE,
-    PRODUCT, EVENT, NORP) and drops entities longer than 2 words.
-    Falls back to an empty list if spaCy is not installed or the model
-    is not available (caller then uses keyword fallback).
-    """
+    “””
+    Extract named entities using spaCy if available, else fall back to NLTK.
+    Returns empty list if neither is installed.
+    “””
     try:
-        import spacy  # optional dependency
+        import spacy
         try:
-            nlp = spacy.load("en_core_web_sm")
+            nlp = spacy.load(“en_core_web_sm”)
         except OSError:
-            return []
+            return _extract_anchors_nltk(text)
         doc = nlp(text)
         seen: set[str] = set()
         anchors: list[str] = []
         for ent in doc.ents:
             if ent.label_ not in _ANCHOR_ENTITY_TYPES:
                 continue
-            raw = ent.text.strip().strip("'\"'‘’“”")
+            raw = ent.text.strip().strip(“’\”’’’”””)
             if not raw or len(raw.split()) > 2:
                 continue
             if raw.lower() not in seen:
                 seen.add(raw.lower())
                 anchors.append(raw)
-            #logger.info("spaCy anchor ent %s and raw %s", ent, raw)
-        #logger.info("spaCy anchor entities: %s", anchors)
+        return anchors
+    except ImportError:
+        return _extract_anchors_nltk(text)
+
+
+def _extract_anchors_nltk(text: str) -> list[str]:
+    try:
+        import nltk
+        from nltk import ne_chunk, pos_tag, word_tokenize
+        from nltk.tree import Tree
+        for resource in (“punkt_tab”, “averaged_perceptron_tagger_eng”, “maxent_ne_chunker_tab”, “words”):
+            try:
+                nltk.data.find(f”tokenizers/{resource}” if resource.startswith(“punkt”) else resource)
+            except LookupError:
+                nltk.download(resource, quiet=True)
+        chunks = ne_chunk(pos_tag(word_tokenize(text)))
+        seen: set[str] = set()
+        anchors: list[str] = []
+        for chunk in chunks:
+            if isinstance(chunk, Tree) and chunk.label() in {“PERSON”, “ORGANIZATION”, “GPE”}:
+                raw = “ “.join(w for w, _ in chunk.leaves()).strip()
+                if raw and len(raw.split()) <= 2 and raw.lower() not in seen:
+                    seen.add(raw.lower())
+                    anchors.append(raw)
         return anchors
     except ImportError:
         return []
