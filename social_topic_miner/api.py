@@ -127,6 +127,7 @@ class TopicMinerAPI:
         import pandas as pd
 
         df_raw = pd.DataFrame(posts)
+        #logger.info("df_raw %s", df_raw)
         result = self._pipeline.run_from_dataframe(df_raw)
         self._last_result = result
 
@@ -226,7 +227,7 @@ class TopicMinerAPI:
 
         Returns
         -------
-        Section3Response
+        Section3Response -> move to call sub cluster and return Topic out for each
             {
               "posts":   list[PostIn],   # filtered, sorted by diversity score desc
               "scores":  list[float],    # 0-1 diversity score per post
@@ -252,13 +253,51 @@ class TopicMinerAPI:
             bubble_keywords=bubble_keywords,
             bubble_embeddings=bubble_embs,
         )
+
+        # return Section3Response(
+        #     balanced=result.balanced,
+        #     balanced_scores=result.balanced_scores,
+        #     other=result.other,
+        #     other_scores=result.other_scores,
+        #     dropped=result.dropped,
+        # )
+
+        balanced_posts = result.balanced
+        balanced_result = self._subcluster(balanced_posts)
+
+        other_posts = result.other
+        other_result = self._subcluster(other_posts)
+        
         return Section3Response(
-            balanced=result.balanced,
-            balanced_scores=result.balanced_scores,
-            other=result.other,
-            other_scores=result.other_scores,
-            dropped=result.dropped,
+            balanced=balanced_result,
+            other=other_result
         )
+    
+    def _subcluster(self, posts: list[PostIn]) -> TopicOut | None:
+        if not posts:
+            return None
+        import pandas as pd
+
+        df_raw = pd.DataFrame(posts)
+        #logger.info("df_raw %s", df_raw)
+        result = self._pipeline.run_from_dataframe_subcluster(df_raw)
+        #logger.info("subcluster result %s", result)
+
+        tr = result
+        s = tr.summary
+
+        return TopicOut(
+                topic_id=tr.topic_id,
+                headline=s.headline       if s else "",
+                category=s.category       if s else "Unknown",
+                short_summary=s.short_summary if s else "",
+                long_summary=s.long_summary   if s else "",
+                keywords=tr.keywords,
+                key_points=s.key_points   if s else [],
+                n_posts=tr.n_posts,
+                n_perspectives=tr.n_perspectives,
+                representative_posts=tr.representative_posts,
+            )
 
     # ------------------------------------------------------------------
     # Combined — all three sections in one call

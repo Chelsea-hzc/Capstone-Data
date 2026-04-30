@@ -83,8 +83,12 @@ class PostNormalizer:
             reddit_mask = df["platform"] == "reddit"
         else:
             # Infer platform from available columns
-            twitter_mask = df.columns.isin(["tweet_id"]).any()
-            reddit_mask = ~twitter_mask
+            if "tweet_id" in df.columns:
+                twitter_mask = pd.Series(True, index=df.index)
+                reddit_mask = pd.Series(False, index=df.index)
+            else:
+                twitter_mask = pd.Series(False, index=df.index)
+                reddit_mask = pd.Series(True, index=df.index)
 
         if twitter_mask.any():
             parts.append(self._normalise_twitter(df[twitter_mask].copy()))

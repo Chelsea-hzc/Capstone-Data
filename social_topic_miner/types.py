@@ -128,12 +128,16 @@ class Section3Request(TypedDict, total=False):
     bubble_keywords: list[str]  # optional but recommended
 
 
+# class Section3Response(TypedDict):
+#     balanced: list[PostIn]          # high-diversity posts → feed back into Section 1
+#     balanced_scores: list[float]    # diversity score per balanced post
+#     other: list[PostIn]             # lower-diversity posts still above minimum floor
+#     other_scores: list[float]       # diversity score per other post
+#     dropped: int                    # posts below minimum floor, discarded
+
 class Section3Response(TypedDict):
-    balanced: list[PostIn]          # high-diversity posts → feed back into Section 1
-    balanced_scores: list[float]    # diversity score per balanced post
-    other: list[PostIn]             # lower-diversity posts still above minimum floor
-    other_scores: list[float]       # diversity score per other post
-    dropped: int                    # posts below minimum floor, discarded
+    balanced: TopicOut
+    other: TopicOut | None
 
 
 # ---------------------------------------------------------------------------

@@ -329,8 +329,8 @@ def _extract_anchors_spacy(text: str) -> list[str]:
             if raw.lower() not in seen:
                 seen.add(raw.lower())
                 anchors.append(raw)
-            logger.info("spaCy anchor ent %s and raw %s", ent, raw)
-        logger.info("spaCy anchor entities: %s", anchors)
+            #logger.info("spaCy anchor ent %s and raw %s", ent, raw)
+        #logger.info("spaCy anchor entities: %s", anchors)
         return anchors
     except ImportError:
         return []
@@ -429,24 +429,24 @@ class QueryBuilder:
         long_summary:          full paragraph summary (reserved for future use)
         """
 
-        logger.info("Topic %d : keywords is %s keypoints is %s headline is %s ", topic_id, keywords, key_points, headline)
+        #logger.info("Topic %d : keywords is %s keypoints is %s headline is %s ", topic_id, keywords, key_points, headline)
 
         expanded_keywords = self._expand_keywords(
             keywords=keywords,
             key_points=key_points,
         )
 
-        logger.info("Expanded Keywords %s ", expanded_keywords)
+        #logger.info("Expanded Keywords %s ", expanded_keywords)
 
         if self.config.use_llm and self.summarizer is not None:
             anchor_terms, bridge_terms = self._llm_anchor_bridge(
                 topic_id, headline, expanded_keywords
             )
-            logger.info("With LLM anchor terms are %s and bridge terms are %s", anchor_terms, bridge_terms)
+            #logger.info("With LLM anchor terms are %s and bridge terms are %s", anchor_terms, bridge_terms)
         else:
             anchor_terms = [t for t in _extract_anchors(headline, expanded_keywords, long_summary) if t and t.strip()]
             bridge_terms = [kw for kw in expanded_keywords if kw not in anchor_terms and kw.strip()]
-            logger.info("WITHOUT LLM anchor terms are %s and bridge terms are %s", anchor_terms, bridge_terms)
+            #logger.info("WITHOUT LLM anchor terms are %s and bridge terms are %s", anchor_terms, bridge_terms)
 
         queries = self._build_stance_queries(
             topic_id=topic_id,

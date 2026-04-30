@@ -36,8 +36,8 @@ _JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
 _DIGEST_SYSTEM_PROMPT = (
     "You are a senior news editor. You will receive a list of trending topics "
     "from a user's social media feed.\n"
-    "Write a neutral, informative digest of 2-3 short sentences that captures the "
-    "overall themes and key highlights across all topics.\n"
+    "Write 1-2 sentences summarising the overall themes. "
+    "Each sentence must be short and punchy — no subclauses, no filler words, no lists.\n"
     "Plain text only — no bullet points, no headers, no markdown."
 )
 
@@ -101,6 +101,11 @@ class BaseSummarizer(ABC):
                 sentences.append(text.rstrip(".") + ".")
         return " ".join(sentences)
 
+    def _truncate_digest(self, text: str, max_sentences: int = 2) -> str:
+        text = text.strip()
+        sentences = re.findall(r"[^.!?]*[.!?]", text)
+        return " ".join(s.strip() for s in sentences[:max_sentences]) if sentences else text
+
     def _build_digest_user_prompt(self, topic_summaries: list[TopicSummary]) -> str:
         lines: list[str] = []
         for ts in topic_summaries:
@@ -124,7 +129,7 @@ class BaseSummarizer(ABC):
         text = raw.strip()
         # Strip markdown code fences if present
         match = _JSON_BLOCK_RE.search(text)
-        logger.info("Parse Response from raw strip %s and json match %s", text, match)
+        #logger.info("Parse Response from raw strip %s and json match %s", text, match)
         if match:
             text = match.group(1).strip()
 

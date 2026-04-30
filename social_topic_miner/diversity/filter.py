@@ -193,11 +193,14 @@ class DiversityFilter:
                     adaptive_threshold,
                 )
 
-        # Apply max_posts_out across both lists (balanced takes priority)
-        remaining = cfg.max_posts_out
-        balanced_pairs = balanced_pairs[:remaining]
-        remaining -= len(balanced_pairs)
-        other_pairs = other_pairs[:max(remaining, 0)]
+        # Apply max_posts_out — reserve at least 30% for other if it has posts
+        if other_pairs:
+            min_other = max(1, int(cfg.max_posts_out * 0.30))
+            max_balanced = cfg.max_posts_out - min(min_other, len(other_pairs))
+        else:
+            max_balanced = cfg.max_posts_out
+        balanced_pairs = balanced_pairs[:max_balanced]
+        other_pairs = other_pairs[:cfg.max_posts_out - len(balanced_pairs)]
 
         metadata: dict = {}
         if adaptive_threshold is not None:

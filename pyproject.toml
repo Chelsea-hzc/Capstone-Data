@@ -24,6 +24,8 @@ dependencies = [
     "bertopic>=0.16",
     "umap-learn>=0.5",
     "hdbscan>=0.8.29",
+    "torch>=2.0",
+    "torchvision>=0.15",
     "sentence-transformers>=2.7",
     "anthropic>=0.25",
     "openai>=1.0",
@@ -32,7 +34,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-llama = ["transformers>=4.40", "accelerate>=0.29", "bitsandbytes>=0.42", "torch>=2.0"]
+llama = ["transformers>=4.40", "accelerate>=0.29", "bitsandbytes>=0.42"]
 dev = ["pytest>=8.0", "ruff>=0.4", "mypy>=1.9"]
 
 [project.urls]

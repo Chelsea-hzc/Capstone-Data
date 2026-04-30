@@ -44,10 +44,10 @@ class AnthropicSummarizer(BaseSummarizer):
         import anthropic
         self._client = anthropic.Anthropic(api_key=api_key)
         self.model = model
-        logger.info("AnthropicSummarizer initialized model=%s", self.model)
+        #logger.info("AnthropicSummarizer initialized model=%s", self.model)
 
     def summarize(self, topic_id: int, posts: list[str], keywords: list[str]) -> TopicSummary:
-        logger.info("Anthropic summarizer for Sampled Topic id %s: keyword is %s and posts are %s ", topic_id, keywords, posts) 
+        #logger.info("Anthropic summarizer for Sampled Topic id %s: keyword is %s and posts are %s ", topic_id, keywords, posts) 
         cfg = self.config
         response = self._client.messages.create(
             model=self.model,
@@ -58,10 +58,10 @@ class AnthropicSummarizer(BaseSummarizer):
             ],
             temperature=cfg.temperature,
         )
-        logger.info("Anthropic summarizer response %s", response)
+        #logger.info("Anthropic summarizer response %s", response)
         raw = response.content[0].text if response.content else ""
         ## raw text have ```json
-        logger.info("Anthropic summarizer raw response.content %s", raw)
+        #logger.info("Anthropic summarizer raw response.content %s", raw)
         return self._parse_response(topic_id, raw)
 
     def summarize_digest(self, topic_summaries: list[TopicSummary]) -> str:
@@ -78,5 +78,5 @@ class AnthropicSummarizer(BaseSummarizer):
             temperature=cfg.temperature,
         )
         raw = response.content[0].text if response.content else ""
-        logger.info("Anthropic digest raw response %s", raw)
-        return raw or super().summarize_digest(topic_summaries)
+        #logger.info("Anthropic digest raw response %s", raw)
+        return self._truncate_digest(raw) if raw else super().summarize_digest(topic_summaries)

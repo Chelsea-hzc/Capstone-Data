@@ -67,4 +67,5 @@ class OpenAISummarizer(BaseSummarizer):
             max_tokens=cfg.max_digest_tokens,
             temperature=0.7,
         )
-        return response.choices[0].message.content or super().summarize_digest(topic_summaries)
+        raw = response.choices[0].message.content or ""
+        return self._truncate_digest(raw) if raw else super().summarize_digest(topic_summaries)
