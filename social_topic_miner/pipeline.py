@@ -193,6 +193,96 @@ class TopicMinerPipeline:
             embeddings=embeddings,
         )
 
+    def partition_and_summarize(
+    self,
+    df: pd.DataFrame,
+    embeddings: np.ndarray,
+    topic_id: int = 0,
+    keywords: list[str] | None = None,
+) -> TopicResult:
+    """
+    Run partition → sample → summarize on a set of posts that already
+    belong to one topic.
+
+    Used by:
+      - Section 1's _run() for each selected topic (after clustering)
+      - Section 3 for the diversity-filtered posts of a single topic
+
+    Parameters
+    ----------
+    df:
+        DataFrame of posts, already cleaned/normalized. Must contain the
+        engagement and platform columns the pipeline expects.
+    embeddings:
+        Embedding matrix aligned with df (one row per post).
+    topic_id:
+        Topic id to assign to all posts (defaults to 0 for single-topic
+        callers like Section 3).
+    keywords:
+        Optional keywords for this topic. Section 1 passes c-TF-IDF keywords;
+        Section 3 can pass [] or the bubble keywords.
+
+    Returns
+    -------
+    TopicResult
+        Same shape as the elements in PipelineResult.topics.
+    """
+    df = df.copy().reset_index(drop=True)
+    df["topic_id"] = topic_id
+
+    # Ensure engagement columns exist (Section 3 input may not have them yet)
+    if "engagement_norm" not in df.columns:
+        df = self._scorer.add_engagement_columns(df)
+
+    # Partition this single topic into sub-perspectives
+    df = self._partitioner.partition(df, embeddings, [topic_id])
+
+    # Sample representative posts
+    sampled = self._sampler.sample(df, embeddings, [topic_id])
+    if not sampled:
+        # No posts selected — return an empty result
+        return TopicResult(
+            topic_id=topic_id,
+            keywords=keywords or [],
+            n_posts=len(df),
+            n_perspectives=0,
+            representative_posts=[],
+            summary=None,
+        )
+
+    st = sampled[0]
+    posts_rows = [
+        {
+            "text": df.loc[idx, "text"],
+            "platform": df.loc[idx, "platform"],
+            "sub_perspective": int(df.loc[idx, "sub_perspective"]),
+            "engagement_norm": float(df.loc[idx, "engagement_norm"]),
+            "post_id": df.loc[idx, "post_id"],
+            "created_at": str(df.loc[idx, "created_at"]),
+        }
+        for idx in st.selected_indices
+    ]
+
+    summary: TopicSummary | None = None
+    if self.summarizer is not None:
+        try:
+            summary = self.summarizer.summarize(
+                topic_id=topic_id,
+                posts=[r["text"] for r in posts_rows],
+                keywords=keywords or [],
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Summarisation failed for topic %d: %s", topic_id, exc)
+
+    return TopicResult(
+        topic_id=topic_id,
+        keywords=keywords or [],
+        n_posts=len(df),
+        n_perspectives=st.n_perspectives,
+        representative_posts=posts_rows,
+        summary=summary,
+    )
+    
     # ------------------------------------------------------------------
     # Convenience: pretty-print results
     # ------------------------------------------------------------------
