@@ -1,5 +1,5 @@
 """
-Section 2 — Echo-chamber query builder.
+Section 2 -- Echo-chamber query builder.
 
 Takes the headline/keywords produced by Section 1 and generates search
 queries designed to surface diverse or opposing perspectives on the same
@@ -272,7 +272,7 @@ def build_query(
 
     Parameters
     ----------
-    anchor_terms:  named entities / specific nouns — keep the query on-topic
+    anchor_terms:  named entities / specific nouns -- keep the query on-topic
     bridge_terms:  topic keywords that link anchors to stances
     stance_terms:  verbs / adjectives indicating the stance angle
     platform:      "twitter" | "reddit" | "any"
@@ -303,14 +303,14 @@ _ANCHOR_ENTITY_TYPES = {"ORG", "PERSON", "GPE", "PRODUCT", "EVENT", "NORP"}
 
 
 def _extract_anchors_spacy(text: str) -> list[str]:
-    “””
+    """
     Extract named entities using spaCy if available, else fall back to NLTK.
     Returns empty list if neither is installed.
-    “””
+    """
     try:
         import spacy
         try:
-            nlp = spacy.load(“en_core_web_sm”)
+            nlp = spacy.load("en_core_web_sm")
         except OSError:
             return _extract_anchors_nltk(text)
         doc = nlp(text)
@@ -319,7 +319,7 @@ def _extract_anchors_spacy(text: str) -> list[str]:
         for ent in doc.ents:
             if ent.label_ not in _ANCHOR_ENTITY_TYPES:
                 continue
-            raw = ent.text.strip().strip(“’\”’’’”””)
+            raw = ent.text.strip().strip("'\"")
             if not raw or len(raw.split()) > 2:
                 continue
             if raw.lower() not in seen:
@@ -335,17 +335,17 @@ def _extract_anchors_nltk(text: str) -> list[str]:
         import nltk
         from nltk import ne_chunk, pos_tag, word_tokenize
         from nltk.tree import Tree
-        for resource in (“punkt_tab”, “averaged_perceptron_tagger_eng”, “maxent_ne_chunker_tab”, “words”):
+        for resource in ("punkt_tab", "averaged_perceptron_tagger_eng", "maxent_ne_chunker_tab", "words"):
             try:
-                nltk.data.find(f”tokenizers/{resource}” if resource.startswith(“punkt”) else resource)
+                nltk.data.find(f"tokenizers/{resource}" if resource.startswith("punkt") else resource)
             except LookupError:
                 nltk.download(resource, quiet=True)
         chunks = ne_chunk(pos_tag(word_tokenize(text)))
         seen: set[str] = set()
         anchors: list[str] = []
         for chunk in chunks:
-            if isinstance(chunk, Tree) and chunk.label() in {“PERSON”, “ORGANIZATION”, “GPE”}:
-                raw = “ “.join(w for w, _ in chunk.leaves()).strip()
+            if isinstance(chunk, Tree) and chunk.label() in {"PERSON", "ORGANIZATION", "GPE"}:
+                raw = " ".join(w for w, _ in chunk.leaves()).strip()
                 if raw and len(raw.split()) <= 2 and raw.lower() not in seen:
                     seen.add(raw.lower())
                     anchors.append(raw)
@@ -395,7 +395,7 @@ class QueryBuilder:
     config:
         QueryBuilderConfig controlling query count, stances, and strategy.
     summarizer:
-        Optional BaseSummarizer — used when config.use_llm is True to let
+        Optional BaseSummarizer -- used when config.use_llm is True to let
         the LLM produce anchor + bridge terms for richer queries.
 
     Example
@@ -682,9 +682,9 @@ class QueryBuilder:
             f'Given this news headline: "{headline}"\n'
             f'And these keywords: {keywords}\n\n'
             'Return JSON with two keys:\n'
-            '  "anchor_terms": 2–4 named entities or specific nouns '
+            '  "anchor_terms": 2-4 named entities or specific nouns '
             'that uniquely identify the topic.\n'
-            '  "bridge_terms": 3–5 general keywords that link the '
+            '  "bridge_terms": 3-5 general keywords that link the '
             'topic to broader discussions.\n'
             'Return ONLY valid JSON, no explanation.'
         )
@@ -700,7 +700,7 @@ class QueryBuilder:
                 return anchor_terms, bridge_terms
         except Exception as exc:
             logger.warning(
-                "LLM anchor extraction failed for topic %d (%s) — "
+                "LLM anchor extraction failed for topic %d (%s) -- "
                 "falling back to NER", topic_id, exc
             )
 
